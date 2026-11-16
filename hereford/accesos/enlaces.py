@@ -1,8 +1,13 @@
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.core import signing
 
-from .services import firmar_accion
+SALT = "hereford.accion-correo.v1"
+
+
+def firmar_accion(accion):
+    return signing.Signer(salt=SALT).sign(str(accion.pk))
 
 
 def construir_enlace(accion):

@@ -1,6 +1,7 @@
 from django.db import transaction
 from django.db.models import Count, Max, Min, Sum
 from rest_framework.exceptions import ValidationError
+
 from .calificacion import calificar_puntajes
 from .exceptions import CatalogoNoDisponible, Conflicto
 from .models import (
@@ -25,9 +26,7 @@ def registrar_respuestas(evaluacion, items):
         raise Conflicto("La evaluación tiene datos parciales y requiere revisión.")
     Respuesta.objects.bulk_create(
         [
-            Respuesta(
-                evaluacionid=locked, preguntaid_id=item["pregunta"], valor=item["valor"]
-            )
+            Respuesta(evaluacionid=locked, preguntaid_id=item["pregunta"], valor=item["valor"])
             for item in validator.validated_data["respuestas"]
         ]
     )
@@ -63,9 +62,7 @@ def calificar(evaluacion):
         calculo = calificar_puntajes(puntos, postulante.genero, catalogo)
     except ValueError as exc:
         raise CatalogoNoDisponible() from exc
-    area_ids = {
-        s["preguntaid__areaid__codigo"]: s["preguntaid__areaid_id"] for s in sumas
-    }
+    area_ids = {s["preguntaid__areaid__codigo"]: s["preguntaid__areaid_id"] for s in sumas}
     ResultadoArea.objects.bulk_create(
         [
             ResultadoArea(

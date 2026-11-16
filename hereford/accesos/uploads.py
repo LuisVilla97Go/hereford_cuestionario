@@ -5,8 +5,6 @@ MAX_BYTES_FOTO = 2 * 1024 * 1024
 
 
 class LimiteFotoUploadHandler(FileUploadHandler):
-    """Corta la recepción antes de almacenar una carga arbitrariamente grande."""
-
     def __init__(self, request=None):
         super().__init__(request)
         self.recibidos = 0

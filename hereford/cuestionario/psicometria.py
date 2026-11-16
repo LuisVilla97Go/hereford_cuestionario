@@ -8,18 +8,12 @@ def alfa_cronbach(matriz):
     k = len(matriz[0])
     if any(len(row) != k for row in matriz):
         raise ValueError("Matriz no rectangular.")
-    if any(
-        type(v) not in (int, float) or not isfinite(v) for row in matriz for v in row
-    ):
+    if any(type(v) not in (int, float) or not isfinite(v) for row in matriz for v in row):
         raise ValueError("Hay valores ausentes o no numéricos finitos.")
     total_var = variance([sum(row) for row in matriz])
     if total_var == 0:
         raise ValueError("Varianza total cero: alfa no definido.")
-    return (
-        k
-        / (k - 1)
-        * (1 - sum(variance(col) for col in zip(*matriz, strict=True)) / total_var)
-    )
+    return k / (k - 1) * (1 - sum(variance(col) for col in zip(*matriz, strict=True)) / total_var)
 
 
 SIGUIENTE_MAYOR = "exacto_o_siguiente_mayor"
@@ -83,6 +77,6 @@ def conversion_por_tabla(puntaje, filas, *, regla=SIGUIENTE_MAYOR, no_encontrado
 
 
 def percentil_por_tabla(puntaje, filas, *, regla=SIGUIENTE_MAYOR, no_encontrado=99):
-    return conversion_por_tabla(
-        puntaje, filas, regla=regla, no_encontrado=no_encontrado
-    )["percentil"]
+    return conversion_por_tabla(puntaje, filas, regla=regla, no_encontrado=no_encontrado)[
+        "percentil"
+    ]

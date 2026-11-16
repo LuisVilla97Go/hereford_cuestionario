@@ -13,7 +13,6 @@ COPY --from=dependencies /opt/venv /opt/venv
 RUN groupadd --gid 10001 hereford && useradd --uid 10001 --gid hereford --no-create-home hereford
 COPY --chown=10001:10001 hereford/ hereford/
 COPY --chown=10001:10001 docker/ docker/
-# Valores ficticios solo para collectstatic, que no consulta BD ni Redis.
 RUN DJANGO_SETTINGS_MODULE=hereford.settings_container \
     DJANGO_SECRET_KEY=solo-build-sin-credenciales-ni-conexiones \
     DJANGO_DEBUG=false DJANGO_ALLOWED_HOSTS=localhost \

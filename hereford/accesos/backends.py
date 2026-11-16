@@ -6,6 +6,9 @@ from .models import IdentidadAcceso
 
 class CorreoBackend(ModelBackend):
     def authenticate(self, request, correo=None, password=None, **kwargs):
+        usuario = kwargs.get("username") or ""
+        if correo is None and "@" in usuario:
+            correo = usuario
         if correo is None or password is None:
             return None
         identidad = (

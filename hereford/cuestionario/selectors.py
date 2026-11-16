@@ -22,9 +22,9 @@ def preguntas():
 
 
 def evaluaciones():
-    return Evaluacion.objects.select_related(
-        "postulanteid", "registro_calificacion"
-    ).order_by("fecha_evaluacion", "pk")
+    return Evaluacion.objects.select_related("postulanteid", "registro_calificacion").order_by(
+        "fecha_evaluacion", "pk"
+    )
 
 
 def resultados(evaluacion):

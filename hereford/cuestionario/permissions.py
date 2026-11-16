@@ -2,7 +2,6 @@ from rest_framework.permissions import DjangoModelPermissions
 
 
 class PersonalConPermisos(DjangoModelPermissions):
-
     perms_map = {
         **DjangoModelPermissions.perms_map,
         "GET": ["%(app_label)s.view_%(model_name)s"],
@@ -15,7 +14,5 @@ class PersonalConPermisos(DjangoModelPermissions):
             return False
         if not super().has_permission(request, view):
             return False
-        extra = getattr(view, "permisos_por_accion", {}).get(
-            getattr(view, "action", None), []
-        )
+        extra = getattr(view, "permisos_por_accion", {}).get(getattr(view, "action", None), [])
         return user.has_perms(extra)

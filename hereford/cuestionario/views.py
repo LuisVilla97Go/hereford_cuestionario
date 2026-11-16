@@ -1,6 +1,9 @@
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
+from accesos.models import AsignacionEvaluacion, IdentidadAcceso
+
 from . import selectors, services
 from .exceptions import Conflicto
 from .models import RegistroCalificacion
@@ -17,12 +20,8 @@ from .serializers import (
 
 
 def _comprobar_no_vinculado(postulante):
-    from accesos.models import IdentidadAcceso
-
     if IdentidadAcceso.objects.filter(postulanteid=postulante).exists():
-        raise Conflicto(
-            "La ficha vinculada a una cuenta requiere un flujo de corrección auditado."
-        )
+        raise Conflicto("La ficha vinculada a una cuenta requiere un flujo de corrección auditado.")
 
 
 class PostulanteViewSet(viewsets.ModelViewSet):
@@ -72,13 +71,9 @@ class EvaluacionViewSet(
 
     @action(detail=True, methods=["post"])
     def respuestas(self, request, pk=None, format=None):
-        from accesos.models import AsignacionEvaluacion
-
         evaluacion = self.get_object()
         if AsignacionEvaluacion.objects.filter(evaluacionid=evaluacion).exists():
-            raise Conflicto(
-                "La evaluación pertenece a una asignación; responde el participante."
-            )
+            raise Conflicto("La evaluación pertenece a una asignación; responde el participante.")
         if evaluacion.completado:
             raise Conflicto("Esta evaluación ya está completada.")
         serializer = EnviarRespuestasSerializer(data=request.data)
@@ -86,9 +81,7 @@ class EvaluacionViewSet(
         evaluacion = services.registrar_respuestas(
             evaluacion, serializer.validated_data["respuestas"]
         )
-        return Response(
-            EvaluacionSerializer(evaluacion).data, status=status.HTTP_201_CREATED
-        )
+        return Response(EvaluacionSerializer(evaluacion).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"])
     def resultados(self, request, pk=None, format=None):

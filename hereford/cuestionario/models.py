@@ -10,9 +10,7 @@ from django.db import models
 
 class Postulante(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4)
-    dni = models.CharField(
-        max_length=20, unique=True, validators=[MinLengthValidator(8)]
-    )
+    dni = models.CharField(max_length=20, unique=True, validators=[MinLengthValidator(8)])
     nombre_completo = models.TextField(blank=True, null=True)
     apellido_paterno = models.TextField()
     apellido_materno = models.TextField()
@@ -136,16 +134,11 @@ class ResultadoArea(models.Model):
         unique_together = ("evaluacionid", "areaid")
 
     def __str__(self):
-        valor = (
-            f"P{self.percentil}"
-            if self.percentil is not None
-            else "percentil pendiente"
-        )
+        valor = f"P{self.percentil}" if self.percentil is not None else "percentil pendiente"
         return f"{self.areaid.nombre}: {valor}"
 
 
 class RegistroCalificacion(models.Model):
-
     id = models.UUIDField(primary_key=True, default=uuid4)
     evaluacionid = models.OneToOneField(
         Evaluacion,
@@ -164,7 +157,6 @@ class RegistroCalificacion(models.Model):
 
 
 class Baremo(models.Model):
-
     id = models.UUIDField(primary_key=True, default=uuid4)
     areaid = models.ForeignKey(
         AreaVocacional,
@@ -183,9 +175,7 @@ class Baremo(models.Model):
     class Meta:
         db_table = "baremos"
         constraints = [
-            models.UniqueConstraint(
-                fields=["areaid", "genero"], name="baremo_area_genero_unico"
-            ),
+            models.UniqueConstraint(fields=["areaid", "genero"], name="baremo_area_genero_unico"),
             models.CheckConstraint(
                 condition=models.Q(genero__in=["M", "F"]), name="baremo_genero_m_f"
             ),

@@ -1,18 +1,14 @@
 import os
+
 from django.core.exceptions import ImproperlyConfigured
+
 from .settings_container import *
 from .settings_container import ALLOWED_HOSTS, DEBUG, SECRET_KEY
 
 if DEBUG:
     raise ImproperlyConfigured("Producción exige DJANGO_DEBUG=false.")
-if (
-    len(SECRET_KEY) < 50
-    or len(set(SECRET_KEY)) < 5
-    or SECRET_KEY.startswith("ejemplo-")
-):
-    raise ImproperlyConfigured(
-        "Producción exige una DJANGO_SECRET_KEY aleatoria y robusta."
-    )
+if len(SECRET_KEY) < 50 or len(set(SECRET_KEY)) < 5 or SECRET_KEY.startswith("ejemplo-"):
+    raise ImproperlyConfigured("Producción exige una DJANGO_SECRET_KEY aleatoria y robusta.")
 if "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("Producción exige hosts explícitos.")
 if not os.environ.get("REDIS_URL"):
@@ -48,8 +44,7 @@ if proxy == "true":
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     ACCESOS_PROXY_CONFIABLE = True
     ACCESOS_PROXY_RENDER = (
-        os.environ.get("RENDER") == "true"
-        and os.environ.get("RENDER_SERVICE_TYPE") == "web"
+        os.environ.get("RENDER") == "true" and os.environ.get("RENDER_SERVICE_TYPE") == "web"
     )
 
 LOGGING = {
