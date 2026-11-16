@@ -1,8 +1,8 @@
-name: hereford-local
+name: hereford-clase
 services:
   backend:
     build: .
-    image: hereford-backend:local
+    image: hereford-clase:local
     init: true
     restart: unless-stopped
     environment:
@@ -23,7 +23,7 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       PORT: "10000"
     ports:
-      - "127.0.0.1:8023:10000"
+      - "127.0.0.1:8024:10000"
     depends_on:
       postgres:
         condition: service_healthy
