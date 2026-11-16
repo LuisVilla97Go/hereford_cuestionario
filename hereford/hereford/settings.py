@@ -10,7 +10,17 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
+from datetime import timedelta
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+from redis.backoff import NoBackoff
+from redis.retry import Retry
+
+# Cargar variables de entorno desde .env
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,13 +29,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-&um67+atpiki5+3f^bacz-0%d$&^l&j)-d=8(7b9##joqfe4%y"
+def required_env(name):
+    value = os.environ.get(name)
+    if not value or not value.strip():
+        raise ImproperlyConfigured(f"Falta la variable {name}.")
+    return value
+
+
+SECRET_KEY = required_env("DJANGO_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+debug_value = os.environ.get("DJANGO_DEBUG", "false").lower()
+if debug_value not in {"true", "false"}:
+    raise ImproperlyConfigured("DJANGO_DEBUG debe ser true o false.")
+DEBUG = debug_value == "true"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in required_env("DJANGO_ALLOWED_HOSTS").split(",")
+    if host.strip()
+]
 
 
 # Application definition
@@ -37,10 +62,15 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
+    "cuestionario",
+    "accesos",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "accesos.middleware.ApiNoStoreMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -67,6 +97,49 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "hereford.wsgi.application"
+ASGI_APPLICATION = "hereford.asgi.application"
+
+# Uso interno hasta definir roles y acceso individual del participante.
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication"
+    ],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAdminUser"],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 100,
+}
+
+# Solo textos del catálogo. Sin Redis se usa un backend sin almacenamiento.
+redis_url = os.environ.get("REDIS_URL")
+CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "catalogo": {
+        "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+    },
+}
+if redis_url:
+    CACHES["catalogo"] = {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": redis_url,
+        "KEY_PREFIX": "hereford-catalogo",
+        "OPTIONS": {
+            "socket_connect_timeout": 1,
+            "socket_timeout": 1,
+            "retry": Retry(NoBackoff(), 0),
+        },
+    }
+
+AUTHENTICATION_BACKENDS = [
+    "accesos.backends.CorreoBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "CHECK_REVOKE_TOKEN": True,
+}
 
 
 # Database
@@ -74,8 +147,14 @@ WSGI_APPLICATION = "hereford.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": required_env("DATABASE_NAME"),
+        "USER": required_env("DATABASE_USER"),
+        "PASSWORD": required_env("DATABASE_PASSWORD"),
+        "HOST": required_env("DATABASE_HOST"),
+        "PORT": required_env("DATABASE_PORT"),
+        "CONN_MAX_AGE": 0,
+        "OPTIONS": {"connect_timeout": 5},
     }
 }
 
@@ -102,9 +181,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "es-pe"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = "America/Lima"
 
 USE_I18N = True
 
@@ -122,6 +201,15 @@ STATIC_URL = "static/"
 
 MAILERS = {
     "default": {
-        "BACKEND": "django.core.mail.backends.console.EmailBackend",
+        "BACKEND": "django.core.mail.backends.dummy.EmailBackend",
     },
 }
+ACCESOS_ENVIOS_HABILITADOS = False
+ACCESOS_URL_PUBLICA = "http://localhost:8000"
+# Solo producción tras un proxy que añade X-Forwarded-For y sin ingreso directo.
+ACCESOS_PROXY_CONFIABLE = False
+DEFAULT_FROM_EMAIL = "orientacion@example.invalid"
+
+# Foto opcional. Un bucket vacío mantiene esa función sin configurar.
+AWS_S3_BUCKET = os.environ.get("AWS_S3_BUCKET", "")
+AWS_S3_REGION = os.environ.get("AWS_S3_REGION", "us-east-2")

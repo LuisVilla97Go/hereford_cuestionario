@@ -1,0 +1,67 @@
+name: hereford-local
+services:
+  backend:
+    build: .
+    image: hereford-backend:local
+    init: true
+    restart: unless-stopped
+    environment:
+      DJANGO_SETTINGS_MODULE: hereford.settings_container
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Definir DJANGO_SECRET_KEY en .env}
+      DJANGO_DEBUG: "false"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: hereford_container
+      DATABASE_USER: hereford
+      DATABASE_PASSWORD: ${DOCKER_POSTGRES_PASSWORD:?Definir DOCKER_POSTGRES_PASSWORD en .env}
+      REDIS_URL: redis://redis:6379/0
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-us-east-2}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      PORT: "10000"
+    ports:
+      - "127.0.0.1:8023:10000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hereford_container
+      POSTGRES_USER: hereford
+      POSTGRES_PASSWORD: ${DOCKER_POSTGRES_PASSWORD:?Definir DOCKER_POSTGRES_PASSWORD en .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hereford -d hereford_container"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:8-bookworm
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+        "--maxmemory",
+        "64mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  postgres_data:
