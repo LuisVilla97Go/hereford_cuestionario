@@ -1,8 +1,12 @@
+from django.db import transaction
+from django.db.models import Count, Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
-from rest_framework import generics, status, viewsets
+from rest_framework import generics, mixins, status, viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
 from rest_framework.parsers import JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.renderers import JSONRenderer
@@ -17,15 +21,20 @@ from cuestionario.serializers import EnviarRespuestasSerializer
 
 from . import fotos, services
 from .models import AsignacionEvaluacion, IdentidadAcceso, Invitacion, ProcesoEvaluacion
-from .permissions import EsParticipante, GestionaAccesos
+from .permissions import EsParticipante, EsSuperusuario, GestionaAccesos
 from .serializers import (
     AceptarSerializer,
     ActivacionSerializer,
     AsignacionSerializer,
     FotoEntradaSerializer,
+    GestorAltaSerializer,
+    GestorEdicionSerializer,
+    GestorSerializer,
     InvitacionSalidaSerializer,
     InvitacionSerializer,
     LoginSerializer,
+    ParticipanteEdicionSerializer,
+    ParticipanteSerializer,
     ParticiparSerializer,
     ProcesoAdminSerializer,
     ProcesoPublicoSerializer,
@@ -55,7 +64,9 @@ class Publica(APIView):
 
 class LoginView(Publica):
     def post(self, request):
-        return Response(services.iniciar_sesion(request=request, **self.entrada(LoginSerializer)))
+        return Response(
+            services.iniciar_sesion(request=request, **self.entrada(LoginSerializer))
+        )
 
 
 class AccesoView(Publica):
@@ -68,6 +79,10 @@ class AccesoView(Publica):
             "consultar_invitacion": {"metodo": "POST", "ruta": reverse("acceso-api")},
             "activar_cuenta": {"metodo": "POST", "ruta": reverse("invitacion-activar")},
             "iniciar_sesion": {"metodo": "POST", "ruta": reverse("correo-login")},
+            "fijar_contrasena": {
+                "metodo": "POST",
+                "ruta": reverse("correo-restablecer"),
+            },
             "aceptar_con_cuenta_existente": {
                 "metodo": "POST",
                 "ruta": reverse("invitacion-aceptar"),
@@ -77,11 +92,17 @@ class AccesoView(Publica):
 
     def get(self, request):
         return Response(
-            {"tipo": "api", "campo_consulta": "token", "operaciones": self.operaciones()}
+            {
+                "tipo": "api",
+                "campo_consulta": "token",
+                "operaciones": self.operaciones(),
+            }
         )
 
     def post(self, request):
-        proceso, vence_en = services.consultar_invitacion(self.entrada(TokenSerializer)["token"])
+        proceso, vence_en = services.consultar_invitacion(
+            self.entrada(TokenSerializer)["token"]
+        )
         return Response(
             {
                 "estado": "vigente",
@@ -94,7 +115,9 @@ class AccesoView(Publica):
 
 class RegistroView(Publica):
     def post(self, request):
-        return Response(services.registrar(self.entrada(RegistroSerializer)), status=202)
+        return Response(
+            services.registrar(self.entrada(RegistroSerializer)), status=202
+        )
 
 
 class VerificarView(Publica):
@@ -105,13 +128,17 @@ class VerificarView(Publica):
 
 class ActivarView(Publica):
     def post(self, request):
-        return Response(services.activar_invitacion(self.entrada(ActivacionSerializer)), status=202)
+        return Response(
+            services.activar_invitacion(self.entrada(ActivacionSerializer)), status=202
+        )
 
 
 class RecuperarView(Publica):
     def post(self, request):
         data = self.entrada(RecuperarSerializer)
-        return Response(services.solicitar_correo(data["correo"], data.get("codigo")), status=202)
+        return Response(
+            services.solicitar_correo(data["correo"], data.get("codigo")), status=202
+        )
 
 
 class RestablecerView(Publica):
@@ -148,7 +175,9 @@ class MeView(Privada):
                 "correo_verificado": identidad.correo_verificado,
                 "activacion_manual": identidad.activacion_manual,
                 "participante": bool(identidad.postulanteid_id),
-                "puede_gestionar_accesos": GestionaAccesos().has_permission(request, self),
+                "puede_gestionar_accesos": GestionaAccesos().has_permission(
+                    request, self
+                ),
             }
         )
 
@@ -168,9 +197,9 @@ class FotoView(Privada):
         serializer = FotoEntradaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         foto = fotos.guardar_foto(request.user, serializer.validated_data["foto"])
-
         return Response(
-            {"foto_registrada": True, "ancho": foto.ancho, "alto": foto.alto}, status=201
+            {"foto_registrada": True, "ancho": foto.ancho, "alto": foto.alto},
+            status=201,
         )
 
     def delete(self, request):
@@ -200,6 +229,14 @@ class ProcesoView(generics.RetrieveAPIView):
     queryset = ProcesoEvaluacion.objects.all()
     serializer_class = ProcesoPublicoSerializer
     lookup_field = "codigo"
+
+    def get_object(self):
+        try:
+            return super().get_object()
+        except Http404 as exc:
+            raise NotFound(
+                "No se encontró un proceso de evaluación con ese código."
+            ) from exc
 
 
 class ParticiparView(Privada):
@@ -277,7 +314,7 @@ class ProcesoAdminViewSet(viewsets.ModelViewSet):
     permission_classes = [GestionaAccesos]
     queryset = ProcesoEvaluacion.objects.all()
     serializer_class = ProcesoAdminSerializer
-    http_method_names = ["get", "post", "patch", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def perform_create(self, serializer):
         from django.db import transaction
@@ -290,7 +327,9 @@ class ProcesoAdminViewSet(viewsets.ModelViewSet):
         from django.db import transaction
 
         with transaction.atomic():
-            actual = ProcesoEvaluacion.objects.select_for_update().get(pk=serializer.instance.pk)
+            actual = ProcesoEvaluacion.objects.select_for_update().get(
+                pk=serializer.instance.pk
+            )
             vigente = type(serializer)(
                 instance=actual,
                 data=serializer.initial_data,
@@ -300,13 +339,20 @@ class ProcesoAdminViewSet(viewsets.ModelViewSet):
             vigente.is_valid(raise_exception=True)
             obj = vigente.save()
             serializer.instance = obj
-            services.auditar(self.request.user, obj, "Configuración del proceso modificada.")
+            services.auditar(
+                self.request.user, obj, "Configuración del proceso modificada."
+            )
+
+    def perform_destroy(self, instance):
+        services.eliminar_proceso(self.request.user, instance)
 
 
 class InvitacionAdminViewSet(viewsets.ReadOnlyModelViewSet):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [GestionaAccesos]
-    queryset = Invitacion.objects.select_related("procesoid").order_by("-vence_en", "id")
+    queryset = Invitacion.objects.select_related("procesoid").order_by(
+        "-vence_en", "id"
+    )
     serializer_class = InvitacionSalidaSerializer
 
     @action(detail=False, methods=["post"])
@@ -330,7 +376,9 @@ class InvitacionAdminViewSet(viewsets.ReadOnlyModelViewSet):
             serializer.validated_data["procesoid"],
             serializer.validated_data["correo"],
         )
-        return Response(self.get_serializer(invitacion).data, status=status.HTTP_201_CREATED)
+        return Response(
+            self.get_serializer(invitacion).data, status=status.HTTP_201_CREATED
+        )
 
     @action(detail=True, methods=["post"])
     def revocar(self, request, pk=None, format=None):
@@ -342,6 +390,126 @@ class InvitacionAdminViewSet(viewsets.ReadOnlyModelViewSet):
         anterior = self.get_object()
         nueva = services.invitar(request.user, anterior.procesoid, anterior.correo)
         return Response(self.get_serializer(nueva).data)
+
+
+class CuentaAdminViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
+
+    authentication_classes = [JWTAuthentication, SessionAuthentication]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    edicion_serializer = None
+    mensaje_edicion = ""
+
+    def update(self, request, *args, **kwargs):
+        entrada = self.edicion_serializer(data=request.data, partial=True)
+        entrada.is_valid(raise_exception=True)
+        objetivo = self.get_object()
+        with transaction.atomic():
+            identidad = IdentidadAcceso.objects.select_for_update().get(pk=objetivo.pk)
+            self.guardar_edicion(identidad, entrada.validated_data)
+            services.auditar(request.user, identidad, self.mensaje_edicion)
+        return Response(
+            self.get_serializer(self.get_queryset().get(pk=identidad.pk)).data
+        )
+
+    @action(detail=True, methods=["post"])
+    def desactivar(self, request, pk=None, format=None):
+        services.desactivar_identidad(self.get_object(), request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["post"])
+    def reactivar(self, request, pk=None, format=None):
+        services.reactivar_identidad(self.get_object(), request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    def destroy(self, request, *args, **kwargs):
+        services.eliminar_identidad(self.get_object(), request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class GestorAdminViewSet(CuentaAdminViewSet):
+    permission_classes = [EsSuperusuario]
+    serializer_class = GestorSerializer
+    edicion_serializer = GestorEdicionSerializer
+    mensaje_edicion = "Datos del gestor modificados."
+    queryset = (
+        IdentidadAcceso.objects.filter(
+            usuarioid__is_staff=True, usuarioid__is_superuser=False
+        )
+        .select_related("usuarioid")
+        .order_by("correo")
+    )
+
+    def guardar_edicion(self, identidad, datos):
+        if "correo" in datos:
+            services.cambiar_correo(identidad, datos.pop("correo"))
+        usuario = identidad.usuarioid
+        for campo, valor in datos.items():
+            setattr(usuario, campo, valor)
+        if datos:
+            usuario.save(update_fields=list(datos))
+
+    def create(self, request, format=None):
+        entrada = GestorAltaSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        with transaction.atomic():
+            identidad = services.crear_gestor(**entrada.validated_data)
+            services.auditar(request.user, identidad, "Gestor creado.")
+            enlace = services.emitir_enlace_gestor(request.user, identidad)
+        datos = {**self.get_serializer(identidad).data, **enlace}
+        return Response(datos, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def enlace(self, request, pk=None, format=None):
+        return Response(
+            services.emitir_enlace_gestor(request.user, self.get_object()),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ParticipanteAdminViewSet(CuentaAdminViewSet):
+
+    permission_classes = [GestionaAccesos]
+    serializer_class = ParticipanteSerializer
+    edicion_serializer = ParticipanteEdicionSerializer
+    mensaje_edicion = "Datos del participante modificados."
+    ESTADOS = {
+        "desactivada": Q(desactivada_en__isnull=False),
+        "habilitada": Q(desactivada_en__isnull=True)
+        & (Q(correo_verificado=True) | Q(activacion_manual=True)),
+        "pendiente": Q(
+            desactivada_en__isnull=True,
+            correo_verificado=False,
+            activacion_manual=False,
+        ),
+    }
+
+    def get_queryset(self):
+        consulta = (
+            IdentidadAcceso.objects.filter(postulanteid__isnull=False)
+            .select_related("usuarioid", "postulanteid")
+            .annotate(asignaciones=Count("asignacionevaluacion"))
+            .order_by("correo")
+        )
+        estado = self.request.query_params.get("estado")
+        if estado in self.ESTADOS:
+            consulta = consulta.filter(self.ESTADOS[estado])
+        if texto := self.request.query_params.get("q", "").strip():
+            consulta = consulta.filter(
+                Q(correo__icontains=texto)
+                | Q(postulanteid__apellido_paterno__icontains=texto)
+            )
+        return consulta
+
+    def guardar_edicion(self, identidad, datos):
+        if "correo" in datos:
+            services.cambiar_correo(identidad, datos.pop("correo"))
+        if datos:
+            services.corregir_ficha(identidad, datos)
 
 
 class AsignacionAdminViewSet(viewsets.ReadOnlyModelViewSet):
