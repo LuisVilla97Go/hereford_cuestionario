@@ -1,9 +1,8 @@
 from datetime import timedelta
 from uuid import UUID, uuid4
-
-from django.contrib.admin.models import CHANGE, LogEntry
+from django.contrib.admin.models import CHANGE, DELETION, LogEntry
 from django.contrib.auth import authenticate, get_user_model
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, Permission
 from django.core import signing
 from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
@@ -11,9 +10,11 @@ from django.views.decorators.debug import sensitive_variables
 from rest_framework.exceptions import AuthenticationFailed, NotFound, ValidationError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 from rest_framework_simplejwt.tokens import RefreshToken
-
 from cuestionario.exceptions import Conflicto
 from cuestionario.models import Evaluacion, Postulante
 from cuestionario.services import registrar_respuestas
@@ -28,7 +29,9 @@ from .models import (
 from .serializers import comprobar_password
 
 MENSAJE_CORREO = {"detalle": "Si corresponde, recibirá instrucciones en su correo."}
-MENSAJE_ACTIVACION = {"detalle": "Solicitud procesada. Si corresponde, puede iniciar sesión."}
+MENSAJE_ACTIVACION = {
+    "detalle": "Solicitud procesada. Si corresponde, puede iniciar sesión."
+}
 SALT = "hereford.accion-correo.v1"
 
 
@@ -42,10 +45,11 @@ def iniciar_sesion(*, correo, password, request=None):
 
 
 def _bloquear_correo(correo):
-
     from django.utils.crypto import salted_hmac
 
-    clave = int(salted_hmac("identidad", correo, algorithm="sha256").hexdigest()[:15], 16)
+    clave = int(
+        salted_hmac("identidad", correo, algorithm="sha256").hexdigest()[:15], 16
+    )
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_xact_lock(%s)", [clave])
 
@@ -75,12 +79,15 @@ def _proceso(codigo):
     return proceso
 
 
-def _encolar(tipo, correo, *, identidad=None, proceso=None, invitacion=None, manual=False):
+def _encolar(
+    tipo, correo, *, identidad=None, proceso=None, invitacion=None, manual=False
+):
     ahora = timezone.now()
-    pendientes = AccionCorreo.objects.filter(tipo=tipo, correo=correo, usada_en__isnull=True)
+    pendientes = AccionCorreo.objects.filter(
+        tipo=tipo, correo=correo, usada_en__isnull=True
+    )
     if tipo != AccionCorreo.Tipo.VERIFICAR:
         pendientes = pendientes.filter(procesoid=proceso)
-
     pendientes.update(usada_en=ahora)
     return AccionCorreo.objects.create(
         tipo=tipo,
@@ -88,11 +95,15 @@ def _encolar(tipo, correo, *, identidad=None, proceso=None, invitacion=None, man
         identidadid=identidad,
         procesoid=proceso,
         invitacionid=invitacion,
-        credencial_version=identidad.usuarioid.get_session_auth_hash() if identidad else "",
+        credencial_version=(
+            identidad.usuarioid.get_session_auth_hash() if identidad else ""
+        ),
         entrega_manual=manual,
-        vence_en=min(ahora + timedelta(hours=72), invitacion.vence_en)
-        if invitacion
-        else ahora + timedelta(hours=1),
+        vence_en=(
+            min(ahora + timedelta(hours=72), invitacion.vence_en)
+            if invitacion
+            else ahora + timedelta(hours=1)
+        ),
     )
 
 
@@ -114,7 +125,10 @@ def _accion_bloqueada(accion):
     if accion.usada_en or accion.vence_en <= timezone.now():
         raise ValidationError("Enlace inválido o vencido.")
     if accion.identidadid_id:
-        if accion.credencial_version != accion.identidadid.usuarioid.get_session_auth_hash():
+        if (
+            accion.credencial_version
+            != accion.identidadid.usuarioid.get_session_auth_hash()
+        ):
             raise ValidationError("Enlace inválido o vencido.")
     return accion
 
@@ -123,7 +137,6 @@ def _nueva_identidad(data):
     try:
         return _crear_identidad(data)
     except IntegrityError:
-
         if (
             IdentidadAcceso.objects.filter(correo=data["correo"]).exists()
             or Postulante.objects.filter(dni=data["datos"]["dni"]).exists()
@@ -160,7 +173,9 @@ def _crear_identidad(data):
 
 def _aviso(proceso, data):
     if data["aviso_version"] != proceso.aviso_version:
-        raise ValidationError({"aviso_version": "Debe leer la versión vigente del aviso."})
+        raise ValidationError(
+            {"aviso_version": "Debe leer la versión vigente del aviso."}
+        )
 
 
 @transaction.atomic
@@ -174,7 +189,10 @@ def registrar(data):
     identidad = _nueva_identidad(data)
     if identidad:
         _encolar(
-            AccionCorreo.Tipo.VERIFICAR, identidad.correo, identidad=identidad, proceso=proceso
+            AccionCorreo.Tipo.VERIFICAR,
+            identidad.correo,
+            identidad=identidad,
+            proceso=proceso,
         )
     return MENSAJE_CORREO
 
@@ -212,15 +230,16 @@ def _asignar(proceso, identidad, invitacion=None):
 @transaction.atomic
 def verificar_correo(token):
     previa = _leer_accion(token, AccionCorreo.Tipo.VERIFICAR)
-
     proceso = (
         ProcesoEvaluacion.objects.select_for_update().get(pk=previa.procesoid_id)
         if previa.procesoid_id
         else None
     )
-    identidad = IdentidadAcceso.objects.select_for_update().get(pk=previa.identidadid_id)
+    identidad = IdentidadAcceso.objects.select_for_update().get(
+        pk=previa.identidadid_id
+    )
     accion = _accion_bloqueada(previa)
-    if identidad.correo_verificado:
+    if identidad.correo_verificado or identidad.desactivada_en:
         raise ValidationError("Enlace inválido o vencido.")
     identidad.correo_verificado = True
     identidad.save(update_fields=["correo_verificado"])
@@ -269,7 +288,11 @@ def invitar(user, proceso, correo, *, manual=False):
     invitacion.vence_en = min(proceso.fin, timezone.now() + timedelta(hours=72))
     invitacion.save(update_fields=["revocada", "vence_en"])
     _encolar(
-        AccionCorreo.Tipo.INVITAR, correo, proceso=proceso, invitacion=invitacion, manual=manual
+        AccionCorreo.Tipo.INVITAR,
+        correo,
+        proceso=proceso,
+        invitacion=invitacion,
+        manual=manual,
     )
     auditar(
         user,
@@ -362,7 +385,6 @@ def activar_invitacion(data):
     identidad = _nueva_identidad(data)
     if identidad is None:
         return MENSAJE_ACTIVACION
-
     identidad.correo_verificado = not accion.entrega_manual
     identidad.activacion_manual = accion.entrega_manual
     identidad.save(update_fields=["correo_verificado", "activacion_manual"])
@@ -389,14 +411,14 @@ def aceptar_invitacion(user, token, aviso_version):
 
 @transaction.atomic
 def solicitar_correo(correo, codigo=None):
-    identidad = IdentidadAcceso.objects.select_for_update().filter(correo=correo).first()
-    if identidad is None:
+    identidad = (
+        IdentidadAcceso.objects.select_for_update().filter(correo=correo).first()
+    )
+    if identidad is None or identidad.desactivada_en:
         return MENSAJE_CORREO
     if identidad.correo_verificado and identidad.usuarioid.is_active:
         _encolar(AccionCorreo.Tipo.RECUPERAR, correo, identidad=identidad)
     elif not identidad.correo_verificado:
-
-
         _encolar(AccionCorreo.Tipo.VERIFICAR, correo, identidad=identidad)
     return MENSAJE_CORREO
 
@@ -404,10 +426,15 @@ def solicitar_correo(correo, codigo=None):
 @transaction.atomic
 def restablecer(token, password):
     previa = _leer_accion(token, AccionCorreo.Tipo.RECUPERAR)
-    identidad = IdentidadAcceso.objects.select_for_update().get(pk=previa.identidadid_id)
+    identidad = IdentidadAcceso.objects.select_for_update().get(
+        pk=previa.identidadid_id
+    )
     user = get_user_model().objects.select_for_update().get(pk=identidad.usuarioid_id)
     accion = _accion_bloqueada(previa)
-    if not user.is_active or not identidad.correo_verificado:
+    confirmada = identidad.correo_verificado or (
+        accion.entrega_manual and identidad.activacion_manual
+    )
+    if not user.is_active or not confirmada or identidad.desactivada_en:
         raise ValidationError("Enlace inválido o vencido.")
     comprobar_password(password, user)
     user.set_password(password)
@@ -415,7 +442,6 @@ def restablecer(token, password):
     AccionCorreo.objects.filter(identidadid=identidad, usada_en__isnull=True).update(
         usada_en=timezone.now()
     )
-
     accion.usada_en = timezone.now()
 
 
@@ -448,6 +474,130 @@ def cerrar_sesion(user, raw):
         raise InvalidToken("Token inválido o vencido.") from exc
 
 
+AVISO_PERSONAL = "personal-interno"
+
+
+@transaction.atomic
+@sensitive_variables("password")
+def crear_gestor(
+    *, correo, first_name="", last_name="", superusuario=False, password=None
+):
+    """Cuenta de personal con login por correo; sin contraseña recibe un enlace después."""
+    correo = correo.strip().lower()
+    _bloquear_correo(correo)
+    if (
+        IdentidadAcceso.objects.filter(correo=correo).exists()
+        or get_user_model().objects.filter(email__iexact=correo).exists()
+    ):
+        raise Conflicto("El correo ya está registrado.")
+    usuario = get_user_model()(
+        username=uuid4().hex,
+        email=correo,
+        first_name=first_name,
+        last_name=last_name,
+        is_staff=True,
+        is_superuser=superusuario,
+        is_active=True,
+    )
+    if password is None:
+        usuario.set_unusable_password()
+    else:
+        comprobar_password(password, usuario)
+        usuario.set_password(password)
+    usuario.save()
+    if not superusuario:
+        usuario.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="accesos", codename="gestionar_accesos"
+            )
+        )
+    return IdentidadAcceso.objects.create(
+        usuarioid=usuario,
+        correo=correo,
+        activacion_manual=True,
+        aviso_version=AVISO_PERSONAL,
+    )
+
+
+@transaction.atomic
+def vincular_gestor(*, usuario, correo):
+    correo = correo.strip().lower()
+    _bloquear_correo(correo)
+    usuario = get_user_model().objects.select_for_update().get(pk=usuario.pk)
+    if not usuario.is_staff:
+        raise Conflicto("Solo se vinculan cuentas de personal.")
+    if IdentidadAcceso.objects.filter(usuarioid=usuario).exists():
+        raise Conflicto("El usuario ya tiene correo de acceso.")
+    if (
+        IdentidadAcceso.objects.filter(correo=correo).exists()
+        or get_user_model()
+        .objects.filter(email__iexact=correo)
+        .exclude(pk=usuario.pk)
+        .exists()
+    ):
+        raise Conflicto("El correo ya está registrado.")
+    usuario.email = correo
+    usuario.save(update_fields=["email"])
+    return IdentidadAcceso.objects.create(
+        usuarioid=usuario,
+        correo=correo,
+        activacion_manual=True,
+        aviso_version=AVISO_PERSONAL,
+    )
+
+
+@transaction.atomic
+def emitir_enlace_gestor(user, identidad):
+    from .enlaces import construir_enlace
+
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
+    if identidad.desactivada_en:
+        raise Conflicto("La cuenta está desactivada.")
+    accion = _encolar(
+        AccionCorreo.Tipo.RECUPERAR, identidad.correo, identidad=identidad, manual=True
+    )
+    auditar(user, identidad, "Enlace de contraseña emitido.")
+    return {"enlace": construir_enlace(accion), "vence_en": accion.vence_en}
+
+
+def _revocar_sesiones(usuario):
+    for token in OutstandingToken.objects.filter(
+        user=usuario, blacklistedtoken__isnull=True
+    ):
+        BlacklistedToken.objects.get_or_create(token=token)
+
+
+@transaction.atomic
+def desactivar_identidad(identidad, user):
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
+    if identidad.desactivada_en:
+        return
+    ahora = timezone.now()
+    identidad.desactivada_en = ahora
+    identidad.save(update_fields=["desactivada_en"])
+    usuario = identidad.usuarioid
+    usuario.is_active = False
+    usuario.save(update_fields=["is_active"])
+    AccionCorreo.objects.filter(identidadid=identidad, usada_en__isnull=True).update(
+        usada_en=ahora
+    )
+    _revocar_sesiones(usuario)
+    auditar(user, identidad, "Cuenta desactivada.")
+
+
+@transaction.atomic
+def reactivar_identidad(identidad, user):
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
+    if not identidad.desactivada_en:
+        return
+    identidad.desactivada_en = None
+    identidad.save(update_fields=["desactivada_en"])
+    usuario = identidad.usuarioid
+    usuario.is_active = identidad.acceso_confirmado
+    usuario.save(update_fields=["is_active"])
+    auditar(user, identidad, "Cuenta reactivada.")
+
+
 @transaction.atomic
 def revocar_asignacion(asignacion, user):
     ProcesoEvaluacion.objects.select_for_update().get(pk=asignacion.procesoid_id)
@@ -459,7 +609,6 @@ def revocar_asignacion(asignacion, user):
 
 @transaction.atomic
 def enviar_respuestas(user, asignacion_id, items):
-
     previa = AsignacionEvaluacion.objects.filter(
         pk=asignacion_id, identidadid__usuarioid=user
     ).first()
@@ -471,3 +620,123 @@ def enviar_respuestas(user, asignacion_id, items):
         raise Conflicto("La asignación está revocada.")
     proceso_vigente(proceso)
     return registrar_respuestas(asignacion.evaluacionid, items)
+
+
+@transaction.atomic
+def eliminar_proceso(user, proceso):
+    from django.db.models import ProtectedError
+
+    proceso = ProcesoEvaluacion.objects.select_for_update().get(pk=proceso.pk)
+    LogEntry.objects.log_actions(
+        user_id=user.pk,
+        queryset=[proceso],
+        action_flag=DELETION,
+        change_message="Proceso eliminado.",
+    )
+    try:
+        proceso.delete()
+    except ProtectedError as exc:
+        raise Conflicto(
+            "El proceso ya tiene registros, invitaciones o participantes; "
+            "ciérrelo con activo=false."
+        ) from exc
+
+
+def cambiar_correo(identidad, correo):
+    if correo == identidad.correo:
+        return
+    _bloquear_correo(correo)
+    usuario = identidad.usuarioid
+    if (
+        IdentidadAcceso.objects.filter(correo=correo).exclude(pk=identidad.pk).exists()
+        or get_user_model()
+        .objects.filter(email__iexact=correo)
+        .exclude(pk=usuario.pk)
+        .exists()
+    ):
+        raise Conflicto("El correo ya está en uso.")
+    identidad.correo = correo
+    identidad.save(update_fields=["correo"])
+    usuario.email = correo
+    usuario.save(update_fields=["email"])
+    AccionCorreo.objects.filter(identidadid=identidad, usada_en__isnull=True).update(
+        usada_en=timezone.now()
+    )
+    _revocar_sesiones(usuario)
+
+
+def corregir_ficha(identidad, datos):
+    ficha = Postulante.objects.select_for_update().get(pk=identidad.postulanteid_id)
+    dni = datos.get("dni")
+    if dni and dni != ficha.dni:
+        _bloquear_correo("dni:" + dni)
+        if Postulante.objects.filter(dni=dni).exclude(pk=ficha.pk).exists():
+            raise Conflicto("El DNI ya está registrado.")
+    for campo, valor in datos.items():
+        setattr(ficha, campo, valor)
+    ficha.save()
+
+
+def _actividad(identidad):
+    usuario = identidad.usuarioid
+
+    if LogEntry.objects.filter(user=usuario).exists():
+        return True
+    if identidad.postulanteid_id is None:
+        return (
+            ProcesoEvaluacion.objects.filter(creado_por=usuario).exists()
+            or Invitacion.objects.filter(creada_por=usuario).exists()
+        )
+    return (
+        AsignacionEvaluacion.objects.filter(identidadid=identidad).exists()
+        or Evaluacion.objects.filter(postulanteid=identidad.postulanteid_id).exists()
+    )
+
+
+@transaction.atomic
+def eliminar_identidad(identidad, user):
+    from django.contrib.contenttypes.models import ContentType
+    from django.db.models import ProtectedError
+
+    from .fotos import (
+        AlmacenamientoNoDisponible,
+        BotoCoreError,
+        ClientError,
+        cliente_s3,
+    )
+    from .models import FotoParticipante
+
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
+    if _actividad(identidad):
+        raise Conflicto(
+            "La cuenta tiene actividad registrada; desactívela en lugar de borrarla."
+        )
+    usuario = identidad.usuarioid
+    ficha = identidad.postulanteid
+    foto = FotoParticipante.objects.filter(identidadid=identidad).first()
+    LogEntry.objects.create(
+        user_id=user.pk,
+        content_type=ContentType.objects.get_for_model(IdentidadAcceso),
+        object_id=str(identidad.pk),
+        object_repr="Participante eliminado" if ficha else "Gestor eliminado",
+        action_flag=DELETION,
+        change_message="Cuenta eliminada.",
+    )
+    try:
+        AccionCorreo.objects.filter(identidadid=identidad).delete()
+        if foto:
+            foto.delete()
+        identidad.delete()
+        if ficha:
+            ficha.delete()
+        OutstandingToken.objects.filter(user=usuario).delete()
+        usuario.delete()
+    except ProtectedError as exc:
+        raise Conflicto(
+            "La cuenta tiene actividad registrada; desactívela en lugar de borrarla."
+        ) from exc
+    if foto:
+        try:
+            cliente_s3(foto.region).delete_object(Bucket=foto.bucket, Key=foto.clave)
+        except (BotoCoreError, ClientError) as exc:
+            raise AlmacenamientoNoDisponible() from exc

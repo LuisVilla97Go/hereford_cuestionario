@@ -1,5 +1,4 @@
 from uuid import uuid4
-
 from django.conf import settings
 from django.db import models
 from django.db.models.functions import Lower
@@ -11,7 +10,11 @@ def codigo_proceso():
 
 class IdentidadesQuerySet(models.QuerySet):
     def habilitadas(self):
-        return self.filter(models.Q(correo_verificado=True) | models.Q(activacion_manual=True))
+
+        return self.filter(
+            models.Q(correo_verificado=True) | models.Q(activacion_manual=True),
+            desactivada_en__isnull=True,
+        )
 
 
 class IdentidadAcceso(models.Model):
@@ -37,17 +40,27 @@ class IdentidadAcceso(models.Model):
     )
     aviso_version = models.CharField(max_length=80)
     aviso_aceptado_en = models.DateTimeField(null=True, blank=True)
+    desactivada_en = models.DateTimeField(null=True, blank=True)
 
     @property
     def acceso_confirmado(self):
         return self.correo_verificado or self.activacion_manual
 
+    @property
+    def estado(self):
+        if self.desactivada_en:
+            return "desactivada"
+        return "habilitada" if self.acceso_confirmado else "pendiente"
+
     class Meta:
         db_table = "identidades_acceso"
         constraints = [
-            models.UniqueConstraint(Lower("correo"), name="identidad_correo_insensible_unico"),
+            models.UniqueConstraint(
+                Lower("correo"), name="identidad_correo_insensible_unico"
+            ),
             models.CheckConstraint(
-                condition=models.Q(correo=Lower("correo")), name="identidad_correo_minusculas"
+                condition=models.Q(correo=Lower("correo")),
+                name="identidad_correo_minusculas",
             ),
         ]
 
@@ -58,7 +71,9 @@ class ProcesoEvaluacion(models.Model):
         INDIVIDUAL = "individual", "Invitación individual"
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
-    codigo = models.CharField(max_length=32, unique=True, default=codigo_proceso, editable=False)
+    codigo = models.CharField(
+        max_length=32, unique=True, default=codigo_proceso, editable=False
+    )
     titulo = models.CharField(max_length=180)
     descripcion = models.TextField(blank=True)
     instrucciones = models.TextField()
@@ -67,16 +82,21 @@ class ProcesoEvaluacion(models.Model):
     inicio = models.DateTimeField()
     fin = models.DateTimeField()
     activo = models.BooleanField(default=False)
-    modalidad = models.CharField(max_length=10, choices=Modalidad, default=Modalidad.ENLACE)
+    modalidad = models.CharField(
+        max_length=10, choices=Modalidad, default=Modalidad.ENLACE
+    )
     creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
 
     class Meta:
         db_table = "procesos_evaluacion"
         ordering = ["-inicio", "id"]
-        permissions = [("gestionar_accesos", "Gestionar procesos, invitaciones y asignaciones")]
+        permissions = [
+            ("gestionar_accesos", "Gestionar procesos, invitaciones y asignaciones")
+        ]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(fin__gt=models.F("inicio")), name="proceso_ventana_valida"
+                condition=models.Q(fin__gt=models.F("inicio")),
+                name="proceso_ventana_valida",
             ),
             models.CheckConstraint(
                 condition=models.Q(modalidad__in=["enlace", "individual"]),
@@ -123,7 +143,11 @@ class AsignacionEvaluacion(models.Model):
         related_name="asignacion_acceso",
     )
     invitacionid = models.OneToOneField(
-        Invitacion, on_delete=models.PROTECT, null=True, blank=True, db_column="invitacion_id"
+        Invitacion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="invitacion_id",
     )
     activa = models.BooleanField(default=True)
     aviso_version = models.CharField(max_length=80)
@@ -135,13 +159,13 @@ class AsignacionEvaluacion(models.Model):
         ordering = ["-creada_en", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["procesoid", "identidadid"], name="asignacion_proceso_identidad_unica"
+                fields=["procesoid", "identidadid"],
+                name="asignacion_proceso_identidad_unica",
             )
         ]
 
 
 class AccionCorreo(models.Model):
-    """Bandeja transaccional. El secreto se firma al despachar, no se guarda en texto."""
 
     class Tipo(models.TextChoices):
         VERIFICAR = "verificar", "Verificar correo"
@@ -152,13 +176,25 @@ class AccionCorreo(models.Model):
     tipo = models.CharField(max_length=10, choices=Tipo)
     correo = models.EmailField()
     identidadid = models.ForeignKey(
-        IdentidadAcceso, on_delete=models.PROTECT, null=True, blank=True, db_column="identidad_id"
+        IdentidadAcceso,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="identidad_id",
     )
     procesoid = models.ForeignKey(
-        ProcesoEvaluacion, on_delete=models.PROTECT, db_column="proceso_id", null=True, blank=True
+        ProcesoEvaluacion,
+        on_delete=models.PROTECT,
+        db_column="proceso_id",
+        null=True,
+        blank=True,
     )
     invitacionid = models.ForeignKey(
-        Invitacion, on_delete=models.PROTECT, null=True, blank=True, db_column="invitacion_id"
+        Invitacion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="invitacion_id",
     )
     credencial_version = models.CharField(max_length=128, blank=True)
     entrega_manual = models.BooleanField(default=False)
@@ -171,12 +207,14 @@ class AccionCorreo(models.Model):
         db_table = "acciones_correo"
         ordering = ["creada_en", "id"]
         indexes = [
-            models.Index(fields=["enviada_en", "usada_en", "vence_en"], name="correo_pendiente_idx")
+            models.Index(
+                fields=["enviada_en", "usada_en", "vence_en"],
+                name="correo_pendiente_idx",
+            )
         ]
 
 
 class LimiteAcceso(models.Model):
-    """Contador compartido entre workers; claves HMAC, nunca correo/IP en claro."""
 
     clave = models.CharField(max_length=64, primary_key=True)
     ventana = models.BigIntegerField()
@@ -189,7 +227,10 @@ class LimiteAcceso(models.Model):
 class FotoParticipante(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     identidadid = models.OneToOneField(
-        IdentidadAcceso, on_delete=models.PROTECT, db_column="identidad_id", related_name="foto"
+        IdentidadAcceso,
+        on_delete=models.PROTECT,
+        db_column="identidad_id",
+        related_name="foto",
     )
     bucket = models.CharField(max_length=63)
     region = models.CharField(max_length=32)
