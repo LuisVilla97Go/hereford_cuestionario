@@ -1,7 +1,6 @@
 import os
 from urllib.request import Request, urlopen
 
-# Host permitido explícitamente, también cuando el sondeo es interno al contenedor.
 host = os.environ["DJANGO_ALLOWED_HOSTS"].split(",")[0].strip()
 request = Request(
     f"http://127.0.0.1:{int(os.environ.get('PORT', '10000'))}/health/ready/",
