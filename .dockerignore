@@ -1,0 +1,10 @@
+*
+!requirements.txt
+!hereford/
+!hereford/**
+!docker/
+!docker/**
+**/__pycache__/
+**/*.pyc
+**/staticfiles/
+**/.env*
