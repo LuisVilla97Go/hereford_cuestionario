@@ -1,6 +1,8 @@
 import logging
+
 from django.core.cache import caches
 from redis.exceptions import RedisError
+
 from .models import Pregunta
 
 logger = logging.getLogger(__name__)

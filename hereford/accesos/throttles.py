@@ -10,7 +10,6 @@ from .models import LimiteAcceso
 
 
 def ip_cliente(request):
-    """IP del cliente según la frontera de confianza del despliegue."""
     remota = request.META.get("REMOTE_ADDR", "")
     if not getattr(settings, "ACCESOS_PROXY_CONFIABLE", False):
         return remota
@@ -25,8 +24,6 @@ def ip_cliente(request):
 
 
 class LimitePersistente(BaseThrottle):
-    """Límite por IP y ruta, transaccional entre procesos. Ver ip_cliente para proxies."""
-
     periodo = 600
     maximo = 300
 

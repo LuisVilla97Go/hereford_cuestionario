@@ -1,19 +1,17 @@
 import hashlib
 import json
+
 from .psicometria import REGLAS, conversion_por_tabla
 
 ALGORITMO = "hereford-suma-area-baremo-v4"
 
 
 def version_catalogo(catalogo):
-    data = json.dumps(
-        catalogo, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
+    data = json.dumps(catalogo, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def calificar_puntajes(puntos, genero, catalogo):
-    """Convierte sumas ya calculadas. En la API proceden de PostgreSQL."""
     if genero not in {"M", "F"}:
         raise ValueError("Grupo de baremación desconocido.")
     if set(puntos) != {a["codigo"] for a in catalogo["areas"]} or any(
@@ -53,9 +51,7 @@ def calificar_puntajes(puntos, genero, catalogo):
                 "interpretacion": area["comentario"],
             }
         )
-    pendientes = [
-        r["area"] for r in resultados if r["estado_conversion"] == "pendiente_baremo"
-    ]
+    pendientes = [r["area"] for r in resultados if r["estado_conversion"] == "pendiente_baremo"]
     return {
         "resultados": resultados,
         "genero_baremo": genero,
@@ -64,8 +60,6 @@ def calificar_puntajes(puntos, genero, catalogo):
         "reportable": False,
         "estado_conversion": "parcial" if pendientes else "completa",
         "areas_pendientes": pendientes,
-        "limitacion": (
-            "Hay conversiones pendientes de revisión. " if pendientes else ""
-        )
+        "limitacion": ("Hay conversiones pendientes de revisión. " if pendientes else "")
         + "Población normativa y edición no acreditadas.",
     }

@@ -1,5 +1,7 @@
 import re
+
 from rest_framework import serializers
+
 from .models import AreaVocacional, Evaluacion, Postulante, Pregunta, ResultadoArea
 
 
@@ -65,9 +67,7 @@ class EnviarRespuestasSerializer(serializers.Serializer):
 
     def validate_respuestas(self, value):
         if sorted(item["pregunta"] for item in value) != list(range(1, 91)):
-            raise serializers.ValidationError(
-                "Se requieren preguntas 1–90 sin repetir."
-            )
+            raise serializers.ValidationError("Se requieren preguntas 1–90 sin repetir.")
         return value
 
 
@@ -87,9 +87,7 @@ class ResultadoAreaSerializer(serializers.ModelSerializer):
     motivo_pendiente = serializers.SerializerMethodField()
 
     def get_nombre_area(self, obj):
-        return self.context.get("nombres_area", {}).get(
-            obj.areaid.codigo, obj.areaid.nombre
-        )
+        return self.context.get("nombres_area", {}).get(obj.areaid.codigo, obj.areaid.nombre)
 
     def get_estado_conversion(self, obj):
         anterior = "pendiente_baremo" if obj.percentil is None else "convertido"
@@ -101,23 +99,15 @@ class ResultadoAreaSerializer(serializers.ModelSerializer):
 
     def get_motivo_pendiente(self, obj):
         return (
-            self.context.get("conversiones", {})
-            .get(obj.areaid.codigo, {})
-            .get("motivo_pendiente")
+            self.context.get("conversiones", {}).get(obj.areaid.codigo, {}).get("motivo_pendiente")
         )
 
     def get_puntaje_baremo(self, obj):
-        return (
-            self.context.get("conversiones", {})
-            .get(obj.areaid.codigo, {})
-            .get("puntaje_baremo")
-        )
+        return self.context.get("conversiones", {}).get(obj.areaid.codigo, {}).get("puntaje_baremo")
 
     def get_tipo_coincidencia(self, obj):
         return (
-            self.context.get("conversiones", {})
-            .get(obj.areaid.codigo, {})
-            .get("tipo_coincidencia")
+            self.context.get("conversiones", {}).get(obj.areaid.codigo, {}).get("tipo_coincidencia")
         )
 
     class Meta:

@@ -1,4 +1,5 @@
 from uuid import uuid4
+
 from django.conf import settings
 from django.db import models
 from django.db.models.functions import Lower
@@ -55,9 +56,7 @@ class IdentidadAcceso(models.Model):
     class Meta:
         db_table = "identidades_acceso"
         constraints = [
-            models.UniqueConstraint(
-                Lower("correo"), name="identidad_correo_insensible_unico"
-            ),
+            models.UniqueConstraint(Lower("correo"), name="identidad_correo_insensible_unico"),
             models.CheckConstraint(
                 condition=models.Q(correo=Lower("correo")),
                 name="identidad_correo_minusculas",
@@ -71,9 +70,7 @@ class ProcesoEvaluacion(models.Model):
         INDIVIDUAL = "individual", "Invitación individual"
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
-    codigo = models.CharField(
-        max_length=32, unique=True, default=codigo_proceso, editable=False
-    )
+    codigo = models.CharField(max_length=32, unique=True, default=codigo_proceso, editable=False)
     titulo = models.CharField(max_length=180)
     descripcion = models.TextField(blank=True)
     instrucciones = models.TextField()
@@ -82,17 +79,13 @@ class ProcesoEvaluacion(models.Model):
     inicio = models.DateTimeField()
     fin = models.DateTimeField()
     activo = models.BooleanField(default=False)
-    modalidad = models.CharField(
-        max_length=10, choices=Modalidad, default=Modalidad.ENLACE
-    )
+    modalidad = models.CharField(max_length=10, choices=Modalidad, default=Modalidad.ENLACE)
     creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
 
     class Meta:
         db_table = "procesos_evaluacion"
         ordering = ["-inicio", "id"]
-        permissions = [
-            ("gestionar_accesos", "Gestionar procesos, invitaciones y asignaciones")
-        ]
+        permissions = [("gestionar_accesos", "Gestionar procesos, invitaciones y asignaciones")]
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(fin__gt=models.F("inicio")),
@@ -166,7 +159,6 @@ class AsignacionEvaluacion(models.Model):
 
 
 class AccionCorreo(models.Model):
-
     class Tipo(models.TextChoices):
         VERIFICAR = "verificar", "Verificar correo"
         RECUPERAR = "recuperar", "Restablecer contraseña"
@@ -215,7 +207,6 @@ class AccionCorreo(models.Model):
 
 
 class LimiteAcceso(models.Model):
-
     clave = models.CharField(max_length=64, primary_key=True)
     ventana = models.BigIntegerField()
     intentos = models.PositiveIntegerField(default=0)

@@ -21,7 +21,6 @@ class ProcesoAdminForm(forms.ModelForm):
     def clean(self):
         datos = super().clean()
         if not self.instance._state.adding:
-
             modificados = set(self.changed_data)
             actual = ProcesoEvaluacion.objects.select_for_update().get(pk=self.instance.pk)
             for nombre in self.fields:

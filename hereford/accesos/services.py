@@ -1,11 +1,15 @@
 from datetime import timedelta
 from uuid import UUID, uuid4
+from botocore.exceptions import BotoCoreError, ClientError
 from django.contrib.admin.models import CHANGE, DELETION, LogEntry
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.db import IntegrityError, connection, transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 from django.views.decorators.debug import sensitive_variables
 from rest_framework.exceptions import AuthenticationFailed, NotFound, ValidationError
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -18,10 +22,12 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from cuestionario.exceptions import Conflicto
 from cuestionario.models import Evaluacion, Postulante
 from cuestionario.services import registrar_respuestas
-
+from . import fotos
+from .enlaces import SALT, construir_enlace
 from .models import (
     AccionCorreo,
     AsignacionEvaluacion,
+    FotoParticipante,
     IdentidadAcceso,
     Invitacion,
     ProcesoEvaluacion,
@@ -32,7 +38,6 @@ MENSAJE_CORREO = {"detalle": "Si corresponde, recibirá instrucciones en su corr
 MENSAJE_ACTIVACION = {
     "detalle": "Solicitud procesada. Si corresponde, puede iniciar sesión."
 }
-SALT = "hereford.accion-correo.v1"
 
 
 @sensitive_variables()
@@ -45,8 +50,6 @@ def iniciar_sesion(*, correo, password, request=None):
 
 
 def _bloquear_correo(correo):
-    from django.utils.crypto import salted_hmac
-
     clave = int(
         salted_hmac("identidad", correo, algorithm="sha256").hexdigest()[:15], 16
     )
@@ -105,10 +108,6 @@ def _encolar(
             else ahora + timedelta(hours=1)
         ),
     )
-
-
-def firmar_accion(accion):
-    return signing.Signer(salt=SALT).sign(str(accion.pk))
 
 
 def _leer_accion(token, tipo):
@@ -304,8 +303,6 @@ def invitar(user, proceso, correo, *, manual=False):
 
 @transaction.atomic
 def emitir_enlace_manual(user, proceso, correo):
-    from .enlaces import construir_enlace
-
     invitacion = invitar(user, proceso, correo, manual=True)
     accion = AccionCorreo.objects.get(
         invitacionid=invitacion, entrega_manual=True, usada_en__isnull=True
@@ -363,7 +360,6 @@ def _consumir_invitacion(accion, invitacion):
 @transaction.atomic
 @sensitive_variables("token")
 def consultar_invitacion(token):
-    """Comprueba el enlace sin aceptar, consumir ni crear una cuenta."""
     previa = _leer_accion(token, AccionCorreo.Tipo.INVITAR)
     proceso = _proceso(previa.procesoid.codigo)
     accion = _accion_bloqueada(previa)
@@ -482,7 +478,6 @@ AVISO_PERSONAL = "personal-interno"
 def crear_gestor(
     *, correo, first_name="", last_name="", superusuario=False, password=None
 ):
-    """Cuenta de personal con login por correo; sin contraseña recibe un enlace después."""
     correo = correo.strip().lower()
     _bloquear_correo(correo)
     if (
@@ -548,8 +543,6 @@ def vincular_gestor(*, usuario, correo):
 
 @transaction.atomic
 def emitir_enlace_gestor(user, identidad):
-    from .enlaces import construir_enlace
-
     identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
     if identidad.desactivada_en:
         raise Conflicto("La cuenta está desactivada.")
@@ -624,8 +617,6 @@ def enviar_respuestas(user, asignacion_id, items):
 
 @transaction.atomic
 def eliminar_proceso(user, proceso):
-    from django.db.models import ProtectedError
-
     proceso = ProcesoEvaluacion.objects.select_for_update().get(pk=proceso.pk)
     LogEntry.objects.log_actions(
         user_id=user.pk,
@@ -679,7 +670,6 @@ def corregir_ficha(identidad, datos):
 
 def _actividad(identidad):
     usuario = identidad.usuarioid
-
     if LogEntry.objects.filter(user=usuario).exists():
         return True
     if identidad.postulanteid_id is None:
@@ -695,17 +685,6 @@ def _actividad(identidad):
 
 @transaction.atomic
 def eliminar_identidad(identidad, user):
-    from django.contrib.contenttypes.models import ContentType
-    from django.db.models import ProtectedError
-
-    from .fotos import (
-        AlmacenamientoNoDisponible,
-        BotoCoreError,
-        ClientError,
-        cliente_s3,
-    )
-    from .models import FotoParticipante
-
     identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
     if _actividad(identidad):
         raise Conflicto(
@@ -737,6 +716,43 @@ def eliminar_identidad(identidad, user):
         ) from exc
     if foto:
         try:
-            cliente_s3(foto.region).delete_object(Bucket=foto.bucket, Key=foto.clave)
+            fotos.cliente_s3(foto.region).delete_object(
+                Bucket=foto.bucket, Key=foto.clave
+            )
         except (BotoCoreError, ClientError) as exc:
-            raise AlmacenamientoNoDisponible() from exc
+            raise fotos.AlmacenamientoNoDisponible() from exc
+
+
+@transaction.atomic
+def emitir_enlace_participante(user, identidad):
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
+    if identidad.desactivada_en:
+        raise Conflicto("La cuenta está desactivada.")
+    if identidad.acceso_confirmado:
+        accion = _encolar(
+            AccionCorreo.Tipo.RECUPERAR,
+            identidad.correo,
+            identidad=identidad,
+            manual=True,
+        )
+    else:
+        registro = (
+            AccionCorreo.objects.filter(
+                identidadid=identidad, tipo=AccionCorreo.Tipo.VERIFICAR
+            )
+            .order_by("-creada_en")
+            .first()
+        )
+        accion = _encolar(
+            AccionCorreo.Tipo.VERIFICAR,
+            identidad.correo,
+            identidad=identidad,
+            proceso=registro.procesoid if registro else None,
+            manual=True,
+        )
+    auditar(user, identidad, "Enlace manual del participante emitido.")
+    return {
+        "enlace": construir_enlace(accion),
+        "vence_en": accion.vence_en,
+        "accion": accion.tipo,
+    }

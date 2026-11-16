@@ -1,5 +1,3 @@
-"""Foto privada opcional: contenido verificado, S3 y referencia propia."""
-
 import logging
 import warnings
 from io import BytesIO
@@ -12,7 +10,12 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from PIL import Image, ImageOps, UnidentifiedImageError
-from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import (
+    APIException,
+    NotFound,
+    PermissionDenied,
+    ValidationError,
+)
 
 from .models import FotoParticipante, IdentidadAcceso
 from .uploads import MAX_BYTES_FOTO
@@ -157,7 +160,12 @@ def datos_foto(foto):
         )
     except (BotoCoreError, ClientError) as exc:
         raise AlmacenamientoNoDisponible() from exc
-    return {"url": url, "vence_en_segundos": URL_SEGUNDOS, "ancho": foto.ancho, "alto": foto.alto}
+    return {
+        "url": url,
+        "vence_en_segundos": URL_SEGUNDOS,
+        "ancho": foto.ancho,
+        "alto": foto.alto,
+    }
 
 
 @transaction.atomic
