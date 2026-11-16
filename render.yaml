@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: hereford-api
+    runtime: docker
+    region: virginia
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: "off"
+    healthCheckPath: /health/live/
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: hereford.settings_production
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_TRUST_PROXY
+        value: "true"
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DJANGO_ALLOWED_HOSTS
+        fromService:
+          type: web
+          name: hereford-api
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: DATABASE_HOST
+        sync: false
+      - key: DATABASE_PORT
+        value: "5432"
+      - key: DATABASE_NAME
+        sync: false
+      - key: DATABASE_USER
+        sync: false
+      - key: DATABASE_PASSWORD
+        sync: false
+      - key: PGSSLMODE
+        value: verify-full
+      - key: PGSSLROOTCERT
+        value: /etc/ssl/certs/ca-certificates.crt
+      - key: PGCHANNELBINDING
+        value: require
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: hereford-cache
+          property: connectionString
+  - type: keyvalue
+    name: hereford-cache
+    region: virginia
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []

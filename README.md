@@ -202,7 +202,7 @@ $cuerpo = @{
     respuestas = @(1..90 | ForEach-Object { @{ pregunta = $_; valor = 3 } })
 } | ConvertTo-Json -Depth 4
 $cabeceras = @{ Authorization = "Bearer $env:HEREFORD_ACCESS_TOKEN" }
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8020/api/mis-evaluaciones/$asignacion/respuestas/" `
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/api/mis-evaluaciones/$asignacion/respuestas/" `
     -Headers $cabeceras -ContentType 'application/json' -Body $cuerpo
 ```
 
@@ -227,7 +227,7 @@ Usa Python 3.14 y un servidor PostgreSQL disponible.
 
 ```powershell
 uv sync --locked --no-dev
-uv run --no-dev uvicorn hereford.asgi:application --app-dir hereford --host 127.0.0.1 --port 8020
+uv run --no-dev uvicorn hereford.asgi:application --app-dir hereford --host 127.0.0.1 --port 8000
 ```
 
 ### pip
