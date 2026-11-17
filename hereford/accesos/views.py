@@ -127,7 +127,7 @@ class AccesoView(Publica):
 
 class RegistroView(Publica):
     def post(self, request):
-        return Response(services.registrar(self.entrada(RegistroSerializer)), status=202)
+        return Response(services.registrar(self.entrada(RegistroSerializer)), status=201)
 
 
 class VerificarView(Publica):
