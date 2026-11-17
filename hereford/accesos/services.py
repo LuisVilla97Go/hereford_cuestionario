@@ -1,5 +1,6 @@
 from datetime import timedelta
 from uuid import UUID, uuid4
+
 from botocore.exceptions import BotoCoreError, ClientError
 from django.contrib.admin.models import CHANGE, DELETION, LogEntry
 from django.contrib.auth import authenticate, get_user_model
@@ -7,21 +8,20 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core import signing
 from django.db import IntegrityError, connection, transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Sum
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from django.views.decorators.debug import sensitive_variables
 from rest_framework.exceptions import AuthenticationFailed, NotFound, ValidationError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.token_blacklist.models import (
-    BlacklistedToken,
-    OutstandingToken,
-)
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
+
 from cuestionario.exceptions import Conflicto
 from cuestionario.models import Evaluacion, Postulante
 from cuestionario.services import registrar_respuestas
+
 from . import fotos
 from .enlaces import SALT, construir_enlace
 from .models import (
@@ -30,14 +30,14 @@ from .models import (
     FotoParticipante,
     IdentidadAcceso,
     Invitacion,
+    Organizacion,
+    Pago,
     ProcesoEvaluacion,
 )
 from .serializers import comprobar_password
 
 MENSAJE_CORREO = {"detalle": "Si corresponde, recibirá instrucciones en su correo."}
-MENSAJE_ACTIVACION = {
-    "detalle": "Solicitud procesada. Si corresponde, puede iniciar sesión."
-}
+MENSAJE_ACTIVACION = {"detalle": "Solicitud procesada. Si corresponde, puede iniciar sesión."}
 
 
 @sensitive_variables()
@@ -50,9 +50,7 @@ def iniciar_sesion(*, correo, password, request=None):
 
 
 def _bloquear_correo(correo):
-    clave = int(
-        salted_hmac("identidad", correo, algorithm="sha256").hexdigest()[:15], 16
-    )
+    clave = int(salted_hmac("identidad", correo, algorithm="sha256").hexdigest()[:15], 16)
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_xact_lock(%s)", [clave])
 
@@ -82,13 +80,9 @@ def _proceso(codigo):
     return proceso
 
 
-def _encolar(
-    tipo, correo, *, identidad=None, proceso=None, invitacion=None, manual=False
-):
+def _encolar(tipo, correo, *, identidad=None, proceso=None, invitacion=None, manual=False):
     ahora = timezone.now()
-    pendientes = AccionCorreo.objects.filter(
-        tipo=tipo, correo=correo, usada_en__isnull=True
-    )
+    pendientes = AccionCorreo.objects.filter(tipo=tipo, correo=correo, usada_en__isnull=True)
     if tipo != AccionCorreo.Tipo.VERIFICAR:
         pendientes = pendientes.filter(procesoid=proceso)
     pendientes.update(usada_en=ahora)
@@ -98,15 +92,11 @@ def _encolar(
         identidadid=identidad,
         procesoid=proceso,
         invitacionid=invitacion,
-        credencial_version=(
-            identidad.usuarioid.get_session_auth_hash() if identidad else ""
-        ),
+        credencial_version=identidad.usuarioid.get_session_auth_hash() if identidad else "",
         entrega_manual=manual,
-        vence_en=(
-            min(ahora + timedelta(hours=72), invitacion.vence_en)
-            if invitacion
-            else ahora + timedelta(hours=1)
-        ),
+        vence_en=min(ahora + timedelta(hours=72), invitacion.vence_en)
+        if invitacion
+        else ahora + timedelta(hours=1),
     )
 
 
@@ -124,10 +114,7 @@ def _accion_bloqueada(accion):
     if accion.usada_en or accion.vence_en <= timezone.now():
         raise ValidationError("Enlace inválido o vencido.")
     if accion.identidadid_id:
-        if (
-            accion.credencial_version
-            != accion.identidadid.usuarioid.get_session_auth_hash()
-        ):
+        if accion.credencial_version != accion.identidadid.usuarioid.get_session_auth_hash():
             raise ValidationError("Enlace inválido o vencido.")
     return accion
 
@@ -172,9 +159,7 @@ def _crear_identidad(data):
 
 def _aviso(proceso, data):
     if data["aviso_version"] != proceso.aviso_version:
-        raise ValidationError(
-            {"aviso_version": "Debe leer la versión vigente del aviso."}
-        )
+        raise ValidationError({"aviso_version": "Debe leer la versión vigente del aviso."})
 
 
 @transaction.atomic
@@ -188,10 +173,7 @@ def registrar(data):
     identidad = _nueva_identidad(data)
     if identidad:
         _encolar(
-            AccionCorreo.Tipo.VERIFICAR,
-            identidad.correo,
-            identidad=identidad,
-            proceso=proceso,
+            AccionCorreo.Tipo.VERIFICAR, identidad.correo, identidad=identidad, proceso=proceso
         )
     return MENSAJE_CORREO
 
@@ -215,6 +197,8 @@ def _asignar(proceso, identidad, invitacion=None):
         if not existente.activa:
             raise Conflicto("La asignación está revocada.")
         return existente
+    if proceso.organizacionid_id:
+        _consumir_cupo(proceso.organizacionid_id)
     evaluacion = Evaluacion.objects.create(postulanteid=identidad.postulanteid)
     return AsignacionEvaluacion.objects.create(
         procesoid=proceso,
@@ -234,9 +218,7 @@ def verificar_correo(token):
         if previa.procesoid_id
         else None
     )
-    identidad = IdentidadAcceso.objects.select_for_update().get(
-        pk=previa.identidadid_id
-    )
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=previa.identidadid_id)
     accion = _accion_bloqueada(previa)
     if identidad.correo_verificado or identidad.desactivada_en:
         raise ValidationError("Enlace inválido o vencido.")
@@ -253,7 +235,11 @@ def verificar_correo(token):
         and proceso.modalidad == ProcesoEvaluacion.Modalidad.ENLACE
         and identidad.aviso_version == proceso.aviso_version
     ):
-        return _asignar(proceso, identidad)
+        try:
+            with transaction.atomic():
+                return _asignar(proceso, identidad)
+        except SinCupos:
+            return None
     return None
 
 
@@ -287,11 +273,7 @@ def invitar(user, proceso, correo, *, manual=False):
     invitacion.vence_en = min(proceso.fin, timezone.now() + timedelta(hours=72))
     invitacion.save(update_fields=["revocada", "vence_en"])
     _encolar(
-        AccionCorreo.Tipo.INVITAR,
-        correo,
-        proceso=proceso,
-        invitacion=invitacion,
-        manual=manual,
+        AccionCorreo.Tipo.INVITAR, correo, proceso=proceso, invitacion=invitacion, manual=manual
     )
     auditar(
         user,
@@ -407,9 +389,7 @@ def aceptar_invitacion(user, token, aviso_version):
 
 @transaction.atomic
 def solicitar_correo(correo, codigo=None):
-    identidad = (
-        IdentidadAcceso.objects.select_for_update().filter(correo=correo).first()
-    )
+    identidad = IdentidadAcceso.objects.select_for_update().filter(correo=correo).first()
     if identidad is None or identidad.desactivada_en:
         return MENSAJE_CORREO
     if identidad.correo_verificado and identidad.usuarioid.is_active:
@@ -422,9 +402,7 @@ def solicitar_correo(correo, codigo=None):
 @transaction.atomic
 def restablecer(token, password):
     previa = _leer_accion(token, AccionCorreo.Tipo.RECUPERAR)
-    identidad = IdentidadAcceso.objects.select_for_update().get(
-        pk=previa.identidadid_id
-    )
+    identidad = IdentidadAcceso.objects.select_for_update().get(pk=previa.identidadid_id)
     user = get_user_model().objects.select_for_update().get(pk=identidad.usuarioid_id)
     accion = _accion_bloqueada(previa)
     confirmada = identidad.correo_verificado or (
@@ -475,9 +453,7 @@ AVISO_PERSONAL = "personal-interno"
 
 @transaction.atomic
 @sensitive_variables("password")
-def crear_gestor(
-    *, correo, first_name="", last_name="", superusuario=False, password=None
-):
+def crear_gestor(*, correo, first_name="", last_name="", superusuario=False, password=None):
     correo = correo.strip().lower()
     _bloquear_correo(correo)
     if (
@@ -502,9 +478,7 @@ def crear_gestor(
     usuario.save()
     if not superusuario:
         usuario.user_permissions.add(
-            Permission.objects.get(
-                content_type__app_label="accesos", codename="gestionar_accesos"
-            )
+            Permission.objects.get(content_type__app_label="accesos", codename="gestionar_accesos")
         )
     return IdentidadAcceso.objects.create(
         usuarioid=usuario,
@@ -525,10 +499,7 @@ def vincular_gestor(*, usuario, correo):
         raise Conflicto("El usuario ya tiene correo de acceso.")
     if (
         IdentidadAcceso.objects.filter(correo=correo).exists()
-        or get_user_model()
-        .objects.filter(email__iexact=correo)
-        .exclude(pk=usuario.pk)
-        .exists()
+        or get_user_model().objects.filter(email__iexact=correo).exclude(pk=usuario.pk).exists()
     ):
         raise Conflicto("El correo ya está registrado.")
     usuario.email = correo
@@ -554,9 +525,7 @@ def emitir_enlace_gestor(user, identidad):
 
 
 def _revocar_sesiones(usuario):
-    for token in OutstandingToken.objects.filter(
-        user=usuario, blacklistedtoken__isnull=True
-    ):
+    for token in OutstandingToken.objects.filter(user=usuario, blacklistedtoken__isnull=True):
         BlacklistedToken.objects.get_or_create(token=token)
 
 
@@ -571,9 +540,7 @@ def desactivar_identidad(identidad, user):
     usuario = identidad.usuarioid
     usuario.is_active = False
     usuario.save(update_fields=["is_active"])
-    AccionCorreo.objects.filter(identidadid=identidad, usada_en__isnull=True).update(
-        usada_en=ahora
-    )
+    AccionCorreo.objects.filter(identidadid=identidad, usada_en__isnull=True).update(usada_en=ahora)
     _revocar_sesiones(usuario)
     auditar(user, identidad, "Cuenta desactivada.")
 
@@ -640,10 +607,7 @@ def cambiar_correo(identidad, correo):
     usuario = identidad.usuarioid
     if (
         IdentidadAcceso.objects.filter(correo=correo).exclude(pk=identidad.pk).exists()
-        or get_user_model()
-        .objects.filter(email__iexact=correo)
-        .exclude(pk=usuario.pk)
-        .exists()
+        or get_user_model().objects.filter(email__iexact=correo).exclude(pk=usuario.pk).exists()
     ):
         raise Conflicto("El correo ya está en uso.")
     identidad.correo = correo
@@ -687,9 +651,7 @@ def _actividad(identidad):
 def eliminar_identidad(identidad, user):
     identidad = IdentidadAcceso.objects.select_for_update().get(pk=identidad.pk)
     if _actividad(identidad):
-        raise Conflicto(
-            "La cuenta tiene actividad registrada; desactívela en lugar de borrarla."
-        )
+        raise Conflicto("La cuenta tiene actividad registrada; desactívela en lugar de borrarla.")
     usuario = identidad.usuarioid
     ficha = identidad.postulanteid
     foto = FotoParticipante.objects.filter(identidadid=identidad).first()
@@ -697,7 +659,9 @@ def eliminar_identidad(identidad, user):
         user_id=user.pk,
         content_type=ContentType.objects.get_for_model(IdentidadAcceso),
         object_id=str(identidad.pk),
-        object_repr="Participante eliminado" if ficha else "Gestor eliminado",
+        object_repr="Participante eliminado"
+        if ficha
+        else ("Cliente eliminado" if identidad.organizacionid_id else "Gestor eliminado"),
         action_flag=DELETION,
         change_message="Cuenta eliminada.",
     )
@@ -716,9 +680,7 @@ def eliminar_identidad(identidad, user):
         ) from exc
     if foto:
         try:
-            fotos.cliente_s3(foto.region).delete_object(
-                Bucket=foto.bucket, Key=foto.clave
-            )
+            fotos.cliente_s3(foto.region).delete_object(Bucket=foto.bucket, Key=foto.clave)
         except (BotoCoreError, ClientError) as exc:
             raise fotos.AlmacenamientoNoDisponible() from exc
 
@@ -730,16 +692,11 @@ def emitir_enlace_participante(user, identidad):
         raise Conflicto("La cuenta está desactivada.")
     if identidad.acceso_confirmado:
         accion = _encolar(
-            AccionCorreo.Tipo.RECUPERAR,
-            identidad.correo,
-            identidad=identidad,
-            manual=True,
+            AccionCorreo.Tipo.RECUPERAR, identidad.correo, identidad=identidad, manual=True
         )
     else:
         registro = (
-            AccionCorreo.objects.filter(
-                identidadid=identidad, tipo=AccionCorreo.Tipo.VERIFICAR
-            )
+            AccionCorreo.objects.filter(identidadid=identidad, tipo=AccionCorreo.Tipo.VERIFICAR)
             .order_by("-creada_en")
             .first()
         )
@@ -751,8 +708,180 @@ def emitir_enlace_participante(user, identidad):
             manual=True,
         )
     auditar(user, identidad, "Enlace manual del participante emitido.")
-    return {
-        "enlace": construir_enlace(accion),
-        "vence_en": accion.vence_en,
-        "accion": accion.tipo,
-    }
+    return {"enlace": construir_enlace(accion), "vence_en": accion.vence_en, "accion": accion.tipo}
+
+
+class SinCupos(Conflicto):
+    default_detail = "La institución no tiene cupos disponibles."
+    default_code = "sin_cupos"
+
+
+def cupos_de(organizacion):
+    comprados = Pago.objects.filter(organizacionid=organizacion).aggregate(total=Sum("cupos"))
+    usados = AsignacionEvaluacion.objects.filter(procesoid__organizacionid=organizacion).count()
+    comprados = comprados["total"] or 0
+    return {"comprados": comprados, "usados": usados, "disponibles": comprados - usados}
+
+
+def _consumir_cupo(organizacion_id):
+    organizacion = Organizacion.objects.select_for_update().get(pk=organizacion_id)
+    if not organizacion.activa:
+        raise SinCupos("La institución no está activa.")
+    if cupos_de(organizacion)["disponibles"] <= 0:
+        raise SinCupos()
+
+
+def invitaciones_pendientes(organizacion):
+    return Invitacion.objects.filter(
+        procesoid__organizacionid=organizacion,
+        revocada=False,
+        aceptada_en__isnull=True,
+        vence_en__gt=timezone.now(),
+    ).count()
+
+
+def aviso_cupos(proceso):
+    if not proceso.organizacionid_id:
+        return None
+    disponibles = cupos_de(proceso.organizacionid_id)["disponibles"]
+    pendientes = invitaciones_pendientes(proceso.organizacionid_id)
+    if pendientes <= disponibles:
+        return None
+    return (
+        f"Hay {pendientes} invitaciones pendientes y {max(disponibles, 0)} cupos disponibles; "
+        "quienes acepten sin cupo recibirán un 409."
+    )
+
+
+@transaction.atomic
+def registrar_pago(user, datos):
+    organizacion = datos.pop("organizacionid", None)
+    if organizacion is not None:
+        organizacion = Organizacion.objects.select_for_update().get(pk=organizacion.pk)
+        if not organizacion.activa:
+            raise Conflicto("La institución está desactivada.")
+        pago = Pago.objects.create(
+            organizacionid=organizacion,
+            es_prueba=organizacion.es_prueba,
+            registrado_por=user,
+            **datos,
+        )
+        auditar(user, pago, "Pago de institución registrado.")
+        return pago, None
+    proceso = ProcesoEvaluacion.objects.select_for_update().get(pk=datos.pop("procesoid").pk)
+    correo = datos.pop("correo")
+    if proceso.organizacionid_id:
+        raise Conflicto("Un pago individual usa un evento de Hereford, sin institución.")
+    previa = Invitacion.objects.filter(procesoid=proceso, correo=correo).first()
+    if (
+        previa
+        and Pago.objects.filter(
+            invitacionid=previa, anula__isnull=True, anulacion__isnull=True
+        ).exists()
+    ):
+        raise Conflicto("Ya hay un pago vigente para esa invitación.")
+    enlace = emitir_enlace_manual(user, proceso, correo)
+    pago = Pago.objects.create(
+        correo=correo,
+        procesoid=proceso,
+        invitacionid_id=enlace["id"],
+        es_prueba=correo.endswith("@example.invalid"),
+        registrado_por=user,
+        **datos,
+    )
+    auditar(user, pago, "Pago individual registrado.")
+    return pago, enlace
+
+
+@transaction.atomic
+def anular_pago(user, pago, nota=""):
+    if pago.organizacionid_id:
+        organizacion = Organizacion.objects.select_for_update().get(pk=pago.organizacionid_id)
+    else:
+        organizacion = None
+        ProcesoEvaluacion.objects.select_for_update().get(pk=pago.procesoid_id)
+    original = Pago.objects.select_for_update().get(pk=pago.pk)
+    if original.anula_id:
+        raise Conflicto("Una anulación no se puede anular; registre un pago nuevo.")
+    if Pago.objects.filter(anula=original).exists():
+        raise Conflicto("El pago ya fue anulado.")
+    if organizacion is not None:
+        disponibles = cupos_de(organizacion)["disponibles"]
+        if disponibles < original.cupos:
+            raise Conflicto(
+                f"No se puede anular: quedan {max(disponibles, 0)} cupos libres y el pago "
+                f"sumó {original.cupos}."
+            )
+    else:
+        invitacion = Invitacion.objects.select_for_update().get(pk=original.invitacionid_id)
+        if invitacion.aceptada_en:
+            raise Conflicto("La persona ya usó el acceso pagado; no se puede anular.")
+        revocar_invitacion(invitacion, user)
+    anulacion = Pago.objects.create(
+        organizacionid=original.organizacionid,
+        correo=original.correo,
+        procesoid=original.procesoid,
+        invitacionid=original.invitacionid,
+        cupos=-original.cupos,
+        monto=-original.monto,
+        moneda=original.moneda,
+        medio=original.medio,
+        referencia=original.referencia,
+        nota=nota,
+        anula=original,
+        es_prueba=original.es_prueba,
+        registrado_por=user,
+    )
+    auditar(user, original, "Pago anulado.")
+    return anulacion
+
+
+AVISO_CLIENTE = "cliente-institucional"
+
+
+@transaction.atomic
+def crear_cliente(*, correo, organizacion, first_name="", last_name=""):
+    correo = correo.strip().lower()
+    _bloquear_correo(correo)
+    if not organizacion.activa:
+        raise Conflicto("La institución está desactivada.")
+    if (
+        IdentidadAcceso.objects.filter(correo=correo).exists()
+        or get_user_model().objects.filter(email__iexact=correo).exists()
+    ):
+        raise Conflicto("El correo ya está registrado.")
+    usuario = get_user_model()(
+        username=uuid4().hex,
+        email=correo,
+        first_name=first_name,
+        last_name=last_name,
+        is_active=True,
+    )
+    usuario.set_unusable_password()
+    usuario.save()
+    grupo, _ = Group.objects.get_or_create(name="clientes")
+    usuario.groups.add(grupo)
+    return IdentidadAcceso.objects.create(
+        usuarioid=usuario,
+        correo=correo,
+        activacion_manual=True,
+        aviso_version=AVISO_CLIENTE,
+        organizacionid=organizacion,
+    )
+
+
+@transaction.atomic
+def eliminar_organizacion(user, organizacion):
+    organizacion = Organizacion.objects.select_for_update().get(pk=organizacion.pk)
+    LogEntry.objects.log_actions(
+        user_id=user.pk,
+        queryset=[organizacion],
+        action_flag=DELETION,
+        change_message="Institución eliminada.",
+    )
+    try:
+        organizacion.delete()
+    except ProtectedError as exc:
+        raise Conflicto(
+            "La institución tiene clientes, eventos o pagos; desactívela con activa=false."
+        ) from exc

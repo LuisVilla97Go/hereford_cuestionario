@@ -4,7 +4,14 @@ from rest_framework import serializers
 
 from cuestionario.serializers import PostulanteSerializer
 
-from .models import AsignacionEvaluacion, IdentidadAcceso, Invitacion, ProcesoEvaluacion
+from .models import (
+    AsignacionEvaluacion,
+    IdentidadAcceso,
+    Invitacion,
+    Organizacion,
+    Pago,
+    ProcesoEvaluacion,
+)
 
 
 class EntradaEstricta(serializers.Serializer):
@@ -134,6 +141,10 @@ class ProcesoPublicoSerializer(serializers.ModelSerializer):
 
 
 class ProcesoAdminSerializer(serializers.ModelSerializer):
+    organizacionid = serializers.PrimaryKeyRelatedField(
+        queryset=Organizacion.objects.filter(activa=True), required=False, allow_null=True
+    )
+
     class Meta:
         model = ProcesoEvaluacion
         fields = [
@@ -148,6 +159,7 @@ class ProcesoAdminSerializer(serializers.ModelSerializer):
             "fin",
             "activo",
             "modalidad",
+            "organizacionid",
         ]
         read_only_fields = ["id", "codigo"]
 
@@ -234,3 +246,123 @@ class AsignacionSerializer(serializers.ModelSerializer):
         model = AsignacionEvaluacion
         fields = ["id", "proceso", "activa", "completado", "creada_en"]
         read_only_fields = fields
+
+
+class ProcesoClienteSerializer(ProcesoAdminSerializer):
+    organizacionid = serializers.PrimaryKeyRelatedField(read_only=True)
+
+
+class OrganizacionSerializer(serializers.ModelSerializer):
+    ruc = serializers.RegexField(r"\A[0-9]{11}\Z", required=False, allow_blank=True)
+    cupos_comprados = serializers.IntegerField(read_only=True)
+    cupos_usados = serializers.IntegerField(read_only=True)
+    cupos_disponibles = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organizacion
+        fields = [
+            "id",
+            "nombre",
+            "ruc",
+            "activa",
+            "es_prueba",
+            "creada_en",
+            "cupos_comprados",
+            "cupos_usados",
+            "cupos_disponibles",
+        ]
+        read_only_fields = ["id", "creada_en"]
+
+    def get_cupos_disponibles(self, obj):
+        return obj.cupos_comprados - obj.cupos_usados
+
+    def validate_es_prueba(self, value):
+        if self.instance is not None and value != self.instance.es_prueba:
+            raise serializers.ValidationError("No se puede cambiar después de crearla.")
+        return value
+
+
+class PagoEntradaSerializer(EntradaEstricta):
+    organizacionid = serializers.PrimaryKeyRelatedField(
+        queryset=Organizacion.objects.all(), required=False
+    )
+    correo = serializers.EmailField(max_length=254, required=False)
+    procesoid = serializers.PrimaryKeyRelatedField(
+        queryset=ProcesoEvaluacion.objects.all(), required=False
+    )
+    cupos = serializers.IntegerField(min_value=1, max_value=10000, required=False)
+    monto = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
+    moneda = serializers.ChoiceField(choices=Pago.Moneda.choices, default=Pago.Moneda.PEN)
+    medio = serializers.ChoiceField(choices=Pago.Medio.choices)
+    referencia = serializers.CharField(max_length=120, required=False, default="")
+    nota = serializers.CharField(required=False, default="")
+
+    def validate_correo(self, value):
+        return value.strip().lower()
+
+    def validate(self, attrs):
+        institucion = "organizacionid" in attrs
+        persona = "correo" in attrs or "procesoid" in attrs
+        if institucion == persona:
+            raise serializers.ValidationError(
+                "Indique organizacionid (institución) o correo y procesoid (persona)."
+            )
+        if institucion:
+            if "cupos" not in attrs:
+                raise serializers.ValidationError({"cupos": "Indique los cupos comprados."})
+            return attrs
+        if "correo" not in attrs or "procesoid" not in attrs:
+            raise serializers.ValidationError("Un pago individual necesita correo y procesoid.")
+        if attrs.setdefault("cupos", 1) != 1:
+            raise serializers.ValidationError({"cupos": "Un pago individual cubre a una persona."})
+        return attrs
+
+
+class PagoSerializer(serializers.ModelSerializer):
+    anulado = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Pago
+        fields = [
+            "id",
+            "organizacionid",
+            "correo",
+            "procesoid",
+            "invitacionid",
+            "cupos",
+            "monto",
+            "moneda",
+            "medio",
+            "referencia",
+            "nota",
+            "anula",
+            "anulado",
+            "es_prueba",
+            "registrado_en",
+        ]
+        read_only_fields = fields
+
+    def get_anulado(self, obj):
+        try:
+            return obj.anulacion is not None
+        except Pago.DoesNotExist:
+            return False
+
+
+class AnulacionSerializer(EntradaEstricta):
+    nota = serializers.CharField(required=False, default="")
+
+
+class ClienteSerializer(GestorSerializer):
+    organizacionid = serializers.PrimaryKeyRelatedField(read_only=True)
+    organizacion = serializers.CharField(source="organizacionid.nombre", read_only=True)
+
+    class Meta(GestorSerializer.Meta):
+        fields = [*GestorSerializer.Meta.fields, "organizacionid", "organizacion"]
+        read_only_fields = fields
+
+
+class ClienteAltaSerializer(GestorAltaSerializer):
+    organizacionid = serializers.PrimaryKeyRelatedField(
+        queryset=Organizacion.objects.filter(activa=True)
+    )

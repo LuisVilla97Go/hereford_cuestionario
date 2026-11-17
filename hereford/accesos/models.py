@@ -11,7 +11,6 @@ def codigo_proceso():
 
 class IdentidadesQuerySet(models.QuerySet):
     def habilitadas(self):
-
         return self.filter(
             models.Q(correo_verificado=True) | models.Q(activacion_manual=True),
             desactivada_en__isnull=True,
@@ -42,6 +41,14 @@ class IdentidadAcceso(models.Model):
     aviso_version = models.CharField(max_length=80)
     aviso_aceptado_en = models.DateTimeField(null=True, blank=True)
     desactivada_en = models.DateTimeField(null=True, blank=True)
+    organizacionid = models.ForeignKey(
+        "Organizacion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="organizacion_id",
+        related_name="clientes",
+    )
 
     @property
     def acceso_confirmado(self):
@@ -58,8 +65,12 @@ class IdentidadAcceso(models.Model):
         constraints = [
             models.UniqueConstraint(Lower("correo"), name="identidad_correo_insensible_unico"),
             models.CheckConstraint(
-                condition=models.Q(correo=Lower("correo")),
-                name="identidad_correo_minusculas",
+                condition=models.Q(correo=Lower("correo")), name="identidad_correo_minusculas"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(organizacionid__isnull=True)
+                | models.Q(postulanteid__isnull=True),
+                name="identidad_cliente_sin_ficha",
             ),
         ]
 
@@ -81,6 +92,14 @@ class ProcesoEvaluacion(models.Model):
     activo = models.BooleanField(default=False)
     modalidad = models.CharField(max_length=10, choices=Modalidad, default=Modalidad.ENLACE)
     creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    organizacionid = models.ForeignKey(
+        "Organizacion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="organizacion_id",
+        related_name="procesos",
+    )
 
     class Meta:
         db_table = "procesos_evaluacion"
@@ -88,8 +107,7 @@ class ProcesoEvaluacion(models.Model):
         permissions = [("gestionar_accesos", "Gestionar procesos, invitaciones y asignaciones")]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(fin__gt=models.F("inicio")),
-                name="proceso_ventana_valida",
+                condition=models.Q(fin__gt=models.F("inicio")), name="proceso_ventana_valida"
             ),
             models.CheckConstraint(
                 condition=models.Q(modalidad__in=["enlace", "individual"]),
@@ -136,11 +154,7 @@ class AsignacionEvaluacion(models.Model):
         related_name="asignacion_acceso",
     )
     invitacionid = models.OneToOneField(
-        Invitacion,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        db_column="invitacion_id",
+        Invitacion, on_delete=models.PROTECT, null=True, blank=True, db_column="invitacion_id"
     )
     activa = models.BooleanField(default=True)
     aviso_version = models.CharField(max_length=80)
@@ -152,8 +166,7 @@ class AsignacionEvaluacion(models.Model):
         ordering = ["-creada_en", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["procesoid", "identidadid"],
-                name="asignacion_proceso_identidad_unica",
+                fields=["procesoid", "identidadid"], name="asignacion_proceso_identidad_unica"
             )
         ]
 
@@ -168,25 +181,13 @@ class AccionCorreo(models.Model):
     tipo = models.CharField(max_length=10, choices=Tipo)
     correo = models.EmailField()
     identidadid = models.ForeignKey(
-        IdentidadAcceso,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        db_column="identidad_id",
+        IdentidadAcceso, on_delete=models.PROTECT, null=True, blank=True, db_column="identidad_id"
     )
     procesoid = models.ForeignKey(
-        ProcesoEvaluacion,
-        on_delete=models.PROTECT,
-        db_column="proceso_id",
-        null=True,
-        blank=True,
+        ProcesoEvaluacion, on_delete=models.PROTECT, db_column="proceso_id", null=True, blank=True
     )
     invitacionid = models.ForeignKey(
-        Invitacion,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        db_column="invitacion_id",
+        Invitacion, on_delete=models.PROTECT, null=True, blank=True, db_column="invitacion_id"
     )
     credencial_version = models.CharField(max_length=128, blank=True)
     entrega_manual = models.BooleanField(default=False)
@@ -199,10 +200,7 @@ class AccionCorreo(models.Model):
         db_table = "acciones_correo"
         ordering = ["creada_en", "id"]
         indexes = [
-            models.Index(
-                fields=["enviada_en", "usada_en", "vence_en"],
-                name="correo_pendiente_idx",
-            )
+            models.Index(fields=["enviada_en", "usada_en", "vence_en"], name="correo_pendiente_idx")
         ]
 
 
@@ -218,10 +216,7 @@ class LimiteAcceso(models.Model):
 class FotoParticipante(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     identidadid = models.OneToOneField(
-        IdentidadAcceso,
-        on_delete=models.PROTECT,
-        db_column="identidad_id",
-        related_name="foto",
+        IdentidadAcceso, on_delete=models.PROTECT, db_column="identidad_id", related_name="foto"
     )
     bucket = models.CharField(max_length=63)
     region = models.CharField(max_length=32)
@@ -233,3 +228,102 @@ class FotoParticipante(models.Model):
 
     class Meta:
         db_table = "fotos_participante"
+
+
+class Organizacion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    nombre = models.CharField(max_length=180)
+    ruc = models.CharField(max_length=11, blank=True)
+    activa = models.BooleanField(default=True)
+    es_prueba = models.BooleanField(default=False)
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "organizaciones"
+        ordering = ["nombre", "id"]
+
+    def __str__(self):
+        return self.nombre
+
+
+class Pago(models.Model):
+    class Moneda(models.TextChoices):
+        PEN = "PEN", "Soles"
+        USD = "USD", "Dólares"
+
+    class Medio(models.TextChoices):
+        TRANSFERENCIA = "transferencia", "Transferencia"
+        YAPE = "yape", "Yape"
+        PLIN = "plin", "Plin"
+        EFECTIVO = "efectivo", "Efectivo"
+        OTRO = "otro", "Otro"
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    organizacionid = models.ForeignKey(
+        Organizacion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="organizacion_id",
+        related_name="pagos",
+    )
+    correo = models.EmailField(blank=True)
+    procesoid = models.ForeignKey(
+        ProcesoEvaluacion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="proceso_id",
+        related_name="pagos",
+    )
+    invitacionid = models.ForeignKey(
+        Invitacion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="invitacion_id",
+        related_name="pagos",
+    )
+    cupos = models.IntegerField()
+    monto = models.DecimalField(max_digits=10, decimal_places=2)
+    moneda = models.CharField(max_length=3, choices=Moneda, default=Moneda.PEN)
+    medio = models.CharField(max_length=15, choices=Medio)
+    referencia = models.CharField(max_length=120, blank=True)
+    nota = models.TextField(blank=True)
+    anula = models.OneToOneField(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        db_column="anula_id",
+        related_name="anulacion",
+    )
+    es_prueba = models.BooleanField(default=False)
+    registrado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    registrado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "pagos"
+        ordering = ["-registrado_en", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(organizacionid__isnull=False, correo="", procesoid__isnull=True)
+                    | (
+                        models.Q(organizacionid__isnull=True, procesoid__isnull=False)
+                        & ~models.Q(correo="")
+                    )
+                ),
+                name="pago_destino_unico",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(anula__isnull=True, cupos__gt=0, monto__gte=0)
+                    | models.Q(anula__isnull=False, cupos__lt=0, monto__lte=0)
+                ),
+                name="pago_signo_coherente",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(moneda__in=["PEN", "USD"]), name="pago_moneda_valida"
+            ),
+        ]

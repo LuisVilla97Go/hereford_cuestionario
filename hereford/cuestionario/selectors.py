@@ -1,12 +1,5 @@
 from .exceptions import CatalogoNoDisponible
-from .models import (
-    AreaVocacional,
-    Baremo,
-    Evaluacion,
-    Postulante,
-    Pregunta,
-    ResultadoArea,
-)
+from .models import AreaVocacional, Baremo, Evaluacion, Postulante, Pregunta, ResultadoArea
 
 
 def postulantes():
@@ -91,3 +84,11 @@ def catalogo_calificacion(genero):
         ],
         "baremos": baremos,
     }
+
+
+def baremos():
+    return (
+        Baremo.objects.select_related("areaid")
+        .prefetch_related("puntos")
+        .order_by("areaid__codigo", "genero")
+    )
