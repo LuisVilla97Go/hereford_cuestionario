@@ -2,10 +2,7 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin
 from rest_framework.exceptions import APIException
-from rest_framework_simplejwt.token_blacklist.models import (
-    BlacklistedToken,
-    OutstandingToken,
-)
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
 from cuestionario.admin import SoloLectura
 
@@ -17,6 +14,8 @@ from .models import (
     FotoParticipante,
     IdentidadAcceso,
     Invitacion,
+    Organizacion,
+    Pago,
     ProcesoEvaluacion,
 )
 
@@ -54,13 +53,7 @@ class ProcesoAdmin(GestionAdmin):
 
 @admin.register(IdentidadAcceso)
 class IdentidadAdmin(SoloLectura):
-    list_display = [
-        "id",
-        "correo",
-        "correo_verificado",
-        "activacion_manual",
-        "postulanteid",
-    ]
+    list_display = ["id", "correo", "correo_verificado", "activacion_manual", "postulanteid"]
     list_select_related = ["postulanteid"]
     list_filter = ["correo_verificado"]
     search_fields = ["correo"]
@@ -121,14 +114,7 @@ class AsignacionAdmin(SoloLectura):
 
 @admin.register(AccionCorreo)
 class CorreoAdmin(SoloLectura):
-    list_display = [
-        "id",
-        "tipo",
-        "entrega_manual",
-        "vence_en",
-        "enviada_en",
-        "usada_en",
-    ]
+    list_display = ["id", "tipo", "entrega_manual", "vence_en", "enviada_en", "usada_en"]
     list_filter = ["tipo"]
     exclude = ["credencial_version"]
 
@@ -161,3 +147,18 @@ admin.site.unregister(OutstandingToken)
 admin.site.register(OutstandingToken, TokenAdmin)
 admin.site.unregister(BlacklistedToken)
 admin.site.register(BlacklistedToken, SoloLectura)
+
+
+@admin.register(Organizacion)
+class OrganizacionAdmin(SoloLectura):
+    list_display = ["nombre", "ruc", "activa", "es_prueba", "creada_en"]
+    list_filter = ["activa", "es_prueba"]
+    search_fields = ["nombre", "ruc"]
+
+
+@admin.register(Pago)
+class PagoAdmin(SoloLectura):
+    list_display = ["registrado_en", "organizacionid", "correo", "cupos", "monto", "moneda"]
+    list_filter = ["es_prueba", "moneda", "medio"]
+    list_select_related = ["organizacionid"]
+    search_fields = ["correo", "referencia", "organizacionid__nombre"]

@@ -8,11 +8,7 @@ urlpatterns = [
     path("auth/registro/", views.RegistroView.as_view(), name="correo-registro"),
     path("auth/verificar-correo/", views.VerificarView.as_view(), name="correo-verificar"),
     path("auth/activar/", views.ActivarView.as_view(), name="invitacion-activar"),
-    path(
-        "auth/aceptar-invitacion/",
-        views.AceptarView.as_view(),
-        name="invitacion-aceptar",
-    ),
+    path("auth/aceptar-invitacion/", views.AceptarView.as_view(), name="invitacion-aceptar"),
     path("auth/refresh/", views.RefreshView.as_view(), name="jwt-refresh"),
     path("auth/logout/", views.LogoutView.as_view(), name="jwt-logout"),
     path("auth/me/", views.MeView.as_view(), name="perfil-propio"),
@@ -25,4 +21,5 @@ urlpatterns = [
         views.ParticiparView.as_view(),
         name="proceso-participar",
     ),
+    path("admin/cupos/", views.CuposView.as_view(), name="cupos-cliente"),
 ]
