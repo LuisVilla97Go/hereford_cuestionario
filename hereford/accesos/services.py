@@ -171,11 +171,9 @@ def registrar(data):
     _bloquear_correo("dni:" + data["datos"]["dni"])
     _bloquear_correo(data["correo"])
     identidad = _nueva_identidad(data)
-    if identidad:
-        _encolar(
-            AccionCorreo.Tipo.VERIFICAR, identidad.correo, identidad=identidad, proceso=proceso
-        )
-    return MENSAJE_CORREO
+    if identidad is None:
+        raise Conflicto("Ya existe una cuenta con ese correo o DNI. Inicia sesión.")
+    return _alta_directa(proceso, identidad)
 
 
 def _asignar(proceso, identidad, invitacion=None):
@@ -885,3 +883,23 @@ def eliminar_organizacion(user, organizacion):
         raise Conflicto(
             "La institución tiene clientes, eventos o pagos; desactívela con activa=false."
         ) from exc
+
+
+def _alta_directa(proceso, identidad):
+    identidad.correo_verificado = True
+    identidad.save(update_fields=["correo_verificado"])
+    user = identidad.usuarioid
+    user.is_active = True
+    user.save(update_fields=["is_active"])
+    asignacion = None
+    try:
+        with transaction.atomic():
+            asignacion = _asignar(proceso, identidad)
+    except SinCupos:
+        pass
+    refresh = RefreshToken.for_user(user)
+    return {
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+        "asignacion": str(asignacion.pk) if asignacion else None,
+    }
